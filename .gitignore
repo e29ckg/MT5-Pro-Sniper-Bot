@@ -1,0 +1,10 @@
+# สภาพแวดล้อมจำลองของ Python
+venv/
+__pycache__/
+
+# ไฟล์ที่มีการอัปเดตตลอดเวลา (ห้ามเอาขึ้นเด็ดขาด)
+live_status.json
+trade_history.json
+
+# ไฟล์ตั้งค่า (ที่มี Token ความลับ)
+config.json
