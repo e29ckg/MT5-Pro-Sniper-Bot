@@ -28,12 +28,19 @@ def send_telegram_msg(config, message):
     token = config.get('telegram_token')
     chat_id = config.get('telegram_chat_id')
     if not token or not chat_id: return
+    
+    # 💡 ดึงราคาปัจจุบันเพิ่ม
+    symbol = config.get('symbol', 'BTCUSDm')
+    tick = mt5.symbol_info_tick(symbol)
+    current_price = tick.bid if tick else 0.0
+    
     try:
         machine_name = socket.gethostname()
     except:
         machine_name = "Unknown_PC"
         
-    full_message = f"🖥️ <b>[{machine_name}]</b>\n{message}"
+    # 💡 เพิ่มราคาเข้าไปในข้อความ
+    full_message = f"🖥️ <b>[{machine_name}]</b>\n{message}\n💰 <b>ราคาปัจจุบัน:</b> {current_price:.2f}"
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": full_message, "parse_mode": "HTML"}
