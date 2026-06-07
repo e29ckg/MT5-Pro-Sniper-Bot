@@ -2,37 +2,38 @@ import MetaTrader5 as mt5
 import pandas as pd
 import itertools
 import time
+from datetime import datetime
 
 # ==========================================
 # ⚙️ 1. ตั้งค่าพารามิเตอร์ที่จะให้บอทสุ่มหา (Grid Search)
 # ==========================================
-# คุณสามารถเพิ่มหรือลดตัวเลขในวงเล็บ [] ได้ตามต้องการ (ยิ่งใส่เยอะ ยิ่งใช้เวลาหานาน)
+# 💡 สามารถเพิ่ม/ลดตัวเลขในวงเล็บได้ (ยิ่งใส่เยอะ ยิ่งใช้เวลาคำนวณนาน)
 PARAMS_GRID = {
-    'quick_profit_target': [3.0, 5.0, 7.0],       # เป้ากำไร (TP)
-    'max_drawdown_usd': [15.0, 25.0, 40.0],       # จุดตัดไฟ (SL)
-    'max_positions': [1, 2, 3],                   # จำนวนไม้ (1 = ไม่ DCA)
-    'dca_step_usd': [5.0, 10.0],                  # ระยะยิงแก้ (USD)
-    'max_gap_usd': [10.0, 15.0],                  # ความกว้างที่ยอมรับได้
-    'min_bounce_ratio': [0.30, 0.40]              # แรงเด้งกลับ
+    'quick_profit_target': [0.5, 10.0, 15.0],          # เป้ากำไร (TP)
+    'max_drawdown_usd': [10.0, 100.0, 150.0],           # จุดตัดไฟ (SL)
+    'max_positions': [3],                         # จำนวนไม้สูงสุด (ล็อคไว้ที่ 3 ไม้เพื่อความปลอดภัย)
+    'dca_step_usd': [50.0, 100.0, 200.0],        # ระยะยิงแก้ (USD)
+    'max_gap_usd': [400.0, 500.0, 600.0],         # ความกว้างของคลื่นที่ยอมรับได้
+    'min_bounce_ratio': [0.25, 0.30, 0.35, 0.40]        # เปอร์เซ็นต์แรงเด้งกลับ
 }
 
 # ตั้งค่าคงที่สำหรับการทดสอบ
-SYMBOL = "XAUUSDm"
+SYMBOL = "BTCUSDm"
 TIMEFRAME = mt5.TIMEFRAME_M1
-BARS_TO_TEST = 10000
-INITIAL_BALANCE = 100.0
-CONTRACT_SIZE = 100.0
+BARS_TO_TEST = 5000            # จำนวนแท่งเทียนย้อนหลังที่จะใช้เทสต์
+INITIAL_BALANCE = 500.0        # ทุนจำลอง
 START_LOT = 0.01
 DCA_LOT_MULT = 1.5
 USE_EMA_FILTER = True
 
 # ==========================================
-# 🧠 2. ฟังก์ชันจำลองการเทรด (เหมือน Backtest แต่เน้นความเร็ว)
+# 🧠 2. ฟังก์ชันจำลองการเทรด (อัปเดตโหมด Fast Scalping)
 # ==========================================
-def simulate_strategy(df, params):
+def simulate_strategy(df, params, contract_size):
     balance = INITIAL_BALANCE
     positions = []
     basket_history = []
+    basket_max_pnl = 0.0
     
     tp_target = params['quick_profit_target']
     sl_target = -abs(params['max_drawdown_usd'])
@@ -48,16 +49,30 @@ def simulate_strategy(df, params):
         total_pnl = 0.0
         for pos in positions:
             if pos['type'] == 'buy':
-                pos['floating_pnl'] = (current_price - pos['entry_price']) * CONTRACT_SIZE * pos['lot']
+                pos['floating_pnl'] = (current_price - pos['entry_price']) * contract_size * pos['lot']
             else:
-                pos['floating_pnl'] = (pos['entry_price'] - current_price) * CONTRACT_SIZE * pos['lot']
+                pos['floating_pnl'] = (pos['entry_price'] - current_price) * contract_size * pos['lot']
             total_pnl += pos['floating_pnl']
 
-        # 2. ตรวจสอบเงื่อนไข Basket Close
+        # 2. โหมดถือออเดอร์ (เช็คปิดตะกร้า)
         if len(positions) > 0:
+            latest_pos = positions[-1]
+            drag = (latest_pos['entry_price'] - current_price) if latest_pos['type'] == 'buy' else (current_price - latest_pos['entry_price'])
+            
+            if total_pnl > basket_max_pnl:
+                basket_max_pnl = total_pnl
+
             closed_basket = False
             
-            if total_pnl >= tp_target:
+            # Trailing Stop
+            trailing_start = 8.0 # สมมติค่าคงที่สำหรับ Trailing 
+            trailing_step = 3.0
+            locked_profit = basket_max_pnl - trailing_step
+            if (basket_max_pnl >= trailing_start) and (total_pnl <= locked_profit):
+                closed_basket = True
+            
+            # TP / SL ปกติ
+            elif total_pnl >= tp_target:
                 closed_basket = True
             elif total_pnl <= sl_target:
                 closed_basket = True
@@ -66,17 +81,14 @@ def simulate_strategy(df, params):
                 balance += total_pnl
                 basket_history.append({'net_pnl': total_pnl})
                 positions.clear() 
+                basket_max_pnl = 0.0
                 
-                if balance <= 0: # พอร์ตแตก หยุดจำลองทันที
+                if balance <= 0: 
                     return balance, len(basket_history), 0
                 continue 
 
-        # 3. ยิงไม้แก้ (DCA)
-        if 0 < len(positions) < max_pos:
-            latest_pos = positions[-1]
-            drag = (latest_pos['entry_price'] - current_price) if latest_pos['type'] == 'buy' else (current_price - latest_pos['entry_price'])
-                
-            if drag >= dca_step:
+            # 3. ยิงไม้แก้ (DCA)
+            if len(positions) < max_pos and drag >= dca_step:
                 new_lot = round(latest_pos['lot'] * DCA_LOT_MULT, 2)
                 positions.append({
                     'type': latest_pos['type'],
@@ -84,18 +96,18 @@ def simulate_strategy(df, params):
                     'lot': new_lot,
                     'floating_pnl': 0.0
                 })
-                continue 
 
-        # 4. หาสัญญาณ X-Sniper + EMA200
-        if len(positions) == 0:
-            closed_5_highs = df['high'].iloc[i-5:i].values
-            closed_5_lows = df['low'].iloc[i-5:i].values
+        # 4. หาสัญญาณ X-Sniper (โหมด 3 แท่งเทียน จมูกไว)
+        else:
+            basket_max_pnl = 0.0
             
-            is_x_below = (closed_5_lows[2] == min(closed_5_lows)) 
-            is_x_above = (closed_5_highs[2] == max(closed_5_highs))
+            closed_3_highs = df['high'].iloc[i-3:i].values
+            closed_3_lows = df['low'].iloc[i-3:i].values
+            is_x_below = (closed_3_lows[1] == min(closed_3_lows)) 
+            is_x_above = (closed_3_highs[1] == max(closed_3_highs))
             
-            kz10_low = df['low'].iloc[i-11:i].min()
-            kz10_high = df['high'].iloc[i-11:i].max()
+            kz10_low = df['low'].iloc[i-7:i].min()
+            kz10_high = df['high'].iloc[i-7:i].max()
             
             ema_200 = df['ema_200'].iloc[i]
             
@@ -104,8 +116,8 @@ def simulate_strategy(df, params):
             ema_sell_condition = (current_price < ema_200) if USE_EMA_FILTER else True
             
             if is_x_below and ema_buy_condition:
-                recent_high = df['high'].iloc[i-9:i].max() 
-                x_low = closed_5_lows[2]
+                recent_high = df['high'].iloc[i-6:i].max() 
+                x_low = closed_3_lows[1]
                 drop_usd = recent_high - x_low
                 bounce_usd = current_price - x_low
                 bounce_ratio = bounce_usd / drop_usd if drop_usd > 0 else 0
@@ -114,8 +126,8 @@ def simulate_strategy(df, params):
                     signal = 'buy'
 
             elif is_x_above and ema_sell_condition:
-                recent_low = df['low'].iloc[i-9:i].min()
-                x_high = closed_5_highs[2]
+                recent_low = df['low'].iloc[i-6:i].min()
+                x_high = closed_3_highs[1]
                 pump_usd = x_high - recent_low
                 pullback_usd = x_high - current_price
                 bounce_ratio = pullback_usd / pump_usd if pump_usd > 0 else 0
@@ -144,8 +156,15 @@ def simulate_strategy(df, params):
 def run_optimizer():
     print("🤖 กำลังเชื่อมต่อ MT5...")
     if not mt5.initialize():
-        print("❌ เชื่อมต่อไม่ได้!")
+        print("❌ เชื่อมต่อไม่ได้! โปรดเปิด MT5 ไว้")
         return
+
+    sym_info = mt5.symbol_info(SYMBOL)
+    if sym_info is None:
+        print(f"❌ ไม่พบสัญลักษณ์ {SYMBOL}")
+        mt5.shutdown()
+        return
+    contract_size = sym_info.trade_contract_size
 
     print(f"📥 กำลังโหลดข้อมูล {SYMBOL} จำนวน {BARS_TO_TEST} แท่ง... (ดึงครั้งเดียว)")
     rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS_TO_TEST)
@@ -171,11 +190,11 @@ def run_optimizer():
         if idx % 20 == 0:
             print(f"⏳ ทดสอบไปแล้ว {idx}/{total_combos} รูปแบบ...")
             
-        final_balance, trades, win_rate = simulate_strategy(df, params)
+        final_balance, trades, win_rate = simulate_strategy(df, params, contract_size)
         net_profit = final_balance - INITIAL_BALANCE
         
-        # เก็บเฉพาะแบบที่เทรดเกิน 10 รอบ เพื่อกรองค่าที่บังเอิญเทรดน้อยแล้วได้กำไร
-        if trades > 10:
+        # เก็บเฉพาะแบบที่เทรดเกิน 5 รอบ เพื่อกรองค่าที่บังเอิญเทรดน้อยแล้วได้กำไร
+        if trades >= 5:
             results.append({
                 'Profit': net_profit,
                 'WinRate': win_rate,
@@ -186,20 +205,20 @@ def run_optimizer():
     print(f"✅ ประมวลผลเสร็จสิ้น! ใช้เวลา {time.time() - start_time:.2f} วินาที\n")
     
     if not results:
-        print("⚠️ ไม่พบการตั้งค่าไหนที่ทำกำไรและเทรดเกิน 10 รอบเลย ลองปรับช่วงพารามิเตอร์ให้กว้างขึ้นครับ")
+        print("⚠️ ไม่พบการตั้งค่าไหนที่ทำกำไรและเทรดรอดเลย ลองปรับช่วงพารามิเตอร์ให้กว้างขึ้นครับ")
         return
         
     # จัดอันดับตามกำไร (Profit) จากมากไปน้อย
     results.sort(key=lambda x: x['Profit'], reverse=True)
     
-    print("🏆 TOP 5 การตั้งค่าที่ดีที่สุด (อิงจากกำไรสุทธิ):")
-    print("="*60)
+    print("🏆 TOP 5 การตั้งค่าที่ดีที่สุดสำหรับ BTC (อิงจากกำไรสุทธิ):")
+    print("="*70)
     for i, res in enumerate(results[:5]):
-        print(f"อันดับที่ {i+1}: กำไร ${res['Profit']:.2f} | Win Rate: {res['WinRate']:.2f}% | เทรด: {res['Trades']} รอบ")
+        print(f"อันดับที่ {i+1}: กำไร ${res['Profit']:.2f} | Win Rate: {res['WinRate']:.0f}% | เทรด: {res['Trades']} รอบ")
         p = res['Params']
-        print(f"   👉 [TP: {p['quick_profit_target']}, SL: {p['max_drawdown_usd']}, MaxPos: {p['max_positions']}, "
+        print(f"   👉 [TP: {p['quick_profit_target']}, SL: {p['max_drawdown_usd']}, "
               f"DCA: {p['dca_step_usd']}, Gap: {p['max_gap_usd']}, Bounce: {p['min_bounce_ratio']}]")
-        print("-" * 60)
+        print("-" * 70)
         
 if __name__ == "__main__":
     run_optimizer()

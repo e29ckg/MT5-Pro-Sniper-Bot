@@ -8,7 +8,7 @@ echo ===================================================
 
 echo.
 echo [1/2] Starting Streamlit Dashboard (app.py)...
-start "Dashboard (app.py)" cmd /k "venv\Scripts\activate && streamlit run app.py"
+start "Dashboard (app.py)" cmd /k "venv\Scripts\activate && streamlit run app.py --server.port 80 --server.address 0.0.0.0"
 
 timeout /t 3 >nul
 

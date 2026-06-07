@@ -31,6 +31,35 @@ config = load_json(CONFIG_FILE)
 # ==========================================
 st.set_page_config(page_title="MT5 Pro Sniper Bot", layout="wide", initial_sidebar_state="expanded")
 
+# ----------------------------------------
+# 🔒 ระบบตรวจสอบรหัสผ่าน (Login System)
+# ----------------------------------------
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        # วาดหน้าต่าง Login ตรงกลางจอ
+        st.markdown("<br><br><br>", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown("<h2 style='text-align: center;'>🔒 เข้าสู่ระบบ MT5 Pro Bot</h2>", unsafe_allow_html=True)
+            st.info("💡 รหัสผ่านเริ่มต้นคือ: **admin123** (สามารถเปลี่ยนได้ที่เมนูด้านซ้ายหลังล็อกอิน)")
+            
+            pwd = st.text_input("🔑 รหัสผ่าน (Password):", type="password")
+            if st.button("🔓 เข้าสู่ระบบ (Login)", use_container_width=True):
+                if pwd == config.get("web_password", "admin123"):
+                    st.session_state["password_correct"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ รหัสผ่านไม่ถูกต้อง! (Incorrect Password)")
+        return False
+    return True
+
+# ถ้ารหัสผ่านยังไม่ถูก ให้หยุดการทำงานของโค้ดด้านล่างทั้งหมดไว้แค่นี้
+if not check_password():
+    st.stop()
+
 # ==========================================
 # ⚙️ เมนูตั้งค่าพารามิเตอร์ (Sidebar)
 # ==========================================
@@ -49,8 +78,11 @@ config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", v
 
 st.sidebar.header("🚑 3. โหมดแก้เกม (DCA)")
 config['max_positions'] = int(st.sidebar.number_input("Max Positions", value=config.get('max_positions', 3), step=1))
-config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 3.5), step=0.5)
+config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 250.0), step=10.0)
 config['dca_lot_mult'] = st.sidebar.number_input("DCA Lot Multiplier", value=config.get('dca_lot_mult', 1.5), step=0.1)
+# 💡 [เพิ่มใหม่] Smart DCA ด้วย RSI
+config['use_smart_dca'] = st.sidebar.checkbox("🧠 เปิดใช้ Smart DCA (รอสุดเทรนด์ค่อยแก้)", value=config.get('use_smart_dca', True))
+st.sidebar.caption("ถ้าเปิด: จะยิงแก้ Buy เมื่อ RSI < 30 (Oversold) และ Sell เมื่อ RSI > 70 (Overbought) เท่านั้น")
 
 st.sidebar.header("🎯 4. เงื่อนไข X-Sniper V6")
 config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 7.0), step=0.5)
@@ -85,20 +117,32 @@ t_force = st.sidebar.time_input("เวลาบังคับตัดจบ",
 config['force_close_time'] = t_force.strftime('%H:%M')
 
 st.sidebar.markdown("---")
-# 💡 [อัปเกรด] ฟีเจอร์ระดับโปร
 st.sidebar.header("🔥 8. ฟีเจอร์ระดับโปร (Pro Features)")
-config['max_spread_points'] = st.sidebar.number_input("สเปรดสูงสุดที่ยอมรับได้ (Points)", value=config.get('max_spread_points', 200), step=10)
-st.sidebar.caption("ป้องกันการเข้าออเดอร์ตอนข่าวแรงหรือช่วงข้ามวัน")
 
-config['use_auto_lot'] = st.sidebar.checkbox("คำนวณ Lot อัตโนมัติตามทุน", value=config.get('use_auto_lot', False))
-config['auto_lot_step'] = st.sidebar.number_input("ทุกๆ เงินทุน ($) เท่ากับ 1 Base Lot", value=config.get('auto_lot_step', 100.0), step=50.0)
-st.sidebar.caption("ตัวอย่าง: ทุน $200 บอทจะใช้ Lot = Start Lot x 2")
+st.sidebar.markdown("**📊 1. กรองความผันผวน (Volatility Filter)**")
+config['max_spread_points'] = st.sidebar.number_input("สเปรดสูงสุด (Points)", value=config.get('max_spread_points', 5000), step=100)
+# 💡 [เพิ่มใหม่] กรองด้วย ATR
+config['use_atr_filter'] = st.sidebar.checkbox("เปิดใช้ ATR Filter (ป้องกันกราฟกระชาก)", value=config.get('use_atr_filter', True))
+config['max_atr_value'] = st.sidebar.number_input("ค่า ATR (M1) สูงสุดที่ยอมรับได้", value=config.get('max_atr_value', 150.0), step=10.0)
+
+st.sidebar.markdown("**📰 2. กรองข่าวเศรษฐกิจ (News Filter)**")
+config['use_news_filter'] = st.sidebar.checkbox("หลบข่าวกล่องแดง (USD High Impact)", value=config.get('use_news_filter', False))
+st.sidebar.caption("บอทจะหยุดยิงไม้แรกล่วงหน้า 15 นาที และหลังข่าวออก 15 นาที (อิงจาก ForexFactory)")
+
+st.sidebar.markdown("**💰 3. การจัดการ Lot**")
+config['use_auto_lot'] = st.sidebar.checkbox("คำนวณ Lot อัตโนมัติ", value=config.get('use_auto_lot', False))
+config['auto_lot_step'] = st.sidebar.number_input("ทุกๆ เงินทุน ($) เท่ากับ 1 Base Lot", value=config.get('auto_lot_step', 500.0), step=50.0)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📱 9. Telegram")
 config['telegram_enabled'] = st.sidebar.checkbox("แจ้งเตือน Telegram", value=config.get('telegram_enabled', False))
 config['telegram_token'] = st.sidebar.text_input("Bot Token", value=config.get('telegram_token', ""), type="password")
 config['telegram_chat_id'] = st.sidebar.text_input("Chat ID", value=config.get('telegram_chat_id', ""))
+
+st.sidebar.markdown("---")
+st.sidebar.header("🔒 10. ความปลอดภัย (Security)")
+config['web_password'] = st.sidebar.text_input("เปลี่ยนรหัสผ่านเข้าเว็บ", value=config.get('web_password', 'admin123'), type="password")
+st.sidebar.caption("ตั้งรหัสผ่านที่เดายากๆ เพื่อป้องกันคนนอกเข้ามาปรับบอท")
 
 save_json(CONFIG_FILE, config)
 
