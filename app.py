@@ -4,27 +4,26 @@ import json
 import os
 import time
 import datetime
-
-CONFIG_FILE = "config.json"
-LIVE_STATUS_FILE = "live_status.json"
-HISTORY_FILE = "trade_history.json"
+import core_db
+import plotly.graph_objects as go # 💡 นำเข้าเครื่องมือวาดกราฟ
 
 # ==========================================
-# 🛠️ ฟังก์ชันจัดการไฟล์ Config & ข้อมูล
+# 🛠️ 1. กำหนดตัวแปรและฟังก์ชันจัดการฐานข้อมูล
 # ==========================================
-def load_json(filename):
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r", encoding='utf-8') as f:
-                return json.load(f)
-        except: pass
-    return {}
+CONFIG_FILE = "config"
+LIVE_STATUS_FILE = "live_status"
+HISTORY_FILE = "trade_history.json" # 💡 ประวัติยังเป็นไฟล์ json เพื่อให้รองรับการ append จาก bot.py
 
-def save_json(filename, data):
-    with open(filename, "w", encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def load_json(key):
+    return core_db.load_db(key)
 
+def save_json(key, data):
+    core_db.save_db(key, data)
+
+# 💡 โหลด config ออกมาก่อน เพื่อให้ระบบ Password มองเห็นรหัสผ่าน
 config = load_json(CONFIG_FILE)
+if not config:
+    config = {}
 
 # ==========================================
 # 🎨 ตั้งค่าหน้าเว็บ (Compact Layout)
@@ -39,7 +38,6 @@ def check_password():
         st.session_state["password_correct"] = False
 
     if not st.session_state["password_correct"]:
-        # วาดหน้าต่าง Login ตรงกลางจอ
         st.markdown("<br><br><br>", unsafe_allow_html=True)
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -56,7 +54,6 @@ def check_password():
         return False
     return True
 
-# ถ้ารหัสผ่านยังไม่ถูก ให้หยุดการทำงานของโค้ดด้านล่างทั้งหมดไว้แค่นี้
 if not check_password():
     st.stop()
 
@@ -64,8 +61,8 @@ if not check_password():
 # ⚙️ เมนูตั้งค่าพารามิเตอร์ (Sidebar)
 # ==========================================
 st.sidebar.header("⚙️ 1. ตั้งค่าพื้นฐาน")
-config['symbol'] = st.sidebar.text_input("Symbol", config.get('symbol', 'XAUUSDm'))
-config['magic_number'] = int(st.sidebar.number_input("Magic Number", value=config.get('magic_number', 999999), step=1))
+config['symbol'] = st.sidebar.text_input("Symbol", config.get('symbol', 'BTCUSDm'))
+config['magic_number'] = int(st.sidebar.number_input("Magic Number", value=config.get('magic_number', 888888), step=1))
 tf_options = {1: "M1", 5: "M5", 15: "M15", 16385: "H1"}
 current_tf_name = tf_options.get(config.get('timeframe', 1), "M1")
 selected_tf_name = st.sidebar.selectbox("Timeframe", list(tf_options.values()), index=list(tf_options.values()).index(current_tf_name))
@@ -74,25 +71,24 @@ config['timeframe'] = [k for k, v in tf_options.items() if v == selected_tf_name
 st.sidebar.header("🌟 2. การตั้งค่ากลยุทธ์")
 config['start_lot'] = st.sidebar.number_input("Start Lot (Base)", value=config.get('start_lot', 0.01), step=0.01)
 config['quick_profit_target'] = st.sidebar.number_input("Quick Profit Target ($)", value=config.get('quick_profit_target', 5.0), step=0.5)
-config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 20.0), step=1.0)
+config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 70.0), step=1.0)
 
 st.sidebar.header("🚑 3. โหมดแก้เกม (DCA)")
 config['max_positions'] = int(st.sidebar.number_input("Max Positions", value=config.get('max_positions', 3), step=1))
 config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 250.0), step=10.0)
 config['dca_lot_mult'] = st.sidebar.number_input("DCA Lot Multiplier", value=config.get('dca_lot_mult', 1.5), step=0.1)
-# 💡 [เพิ่มใหม่] Smart DCA ด้วย RSI
 config['use_smart_dca'] = st.sidebar.checkbox("🧠 เปิดใช้ Smart DCA (รอสุดเทรนด์ค่อยแก้)", value=config.get('use_smart_dca', True))
 st.sidebar.caption("ถ้าเปิด: จะยิงแก้ Buy เมื่อ RSI < 30 (Oversold) และ Sell เมื่อ RSI > 70 (Overbought) เท่านั้น")
 
 st.sidebar.header("🎯 4. เงื่อนไข X-Sniper V6")
-config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 7.0), step=0.5)
-config['min_bounce_ratio'] = st.sidebar.number_input("Min Bounce Ratio", value=config.get('min_bounce_ratio', 0.40), step=0.05)
+config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 400.0), step=10.0)
+config['min_bounce_ratio'] = st.sidebar.number_input("Min Bounce Ratio", value=config.get('min_bounce_ratio', 0.35), step=0.05)
 
 st.sidebar.header("📈 5. ระบบกรองเทรนด์ (EMA 200)")
 config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter", value=config.get('use_ema_filter', True))
 
 st.sidebar.header("🛡️ 6. ระบบกันหน้าทุน (Trailing Stop)")
-config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', False))
+config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', True))
 config['trailing_start_usd'] = st.sidebar.number_input("เริ่มล็อกเมื่อกำไรถึง ($)", value=config.get('trailing_start_usd', 3.0), step=0.5)
 config['trailing_step_usd'] = st.sidebar.number_input("ระยะถอยย่อ (Trailing Step $)", value=config.get('trailing_step_usd', 1.0), step=0.5)
 
@@ -121,7 +117,6 @@ st.sidebar.header("🔥 8. ฟีเจอร์ระดับโปร (Pro Fe
 
 st.sidebar.markdown("**📊 1. กรองความผันผวน (Volatility Filter)**")
 config['max_spread_points'] = st.sidebar.number_input("สเปรดสูงสุด (Points)", value=config.get('max_spread_points', 5000), step=100)
-# 💡 [เพิ่มใหม่] กรองด้วย ATR
 config['use_atr_filter'] = st.sidebar.checkbox("เปิดใช้ ATR Filter (ป้องกันกราฟกระชาก)", value=config.get('use_atr_filter', True))
 config['max_atr_value'] = st.sidebar.number_input("ค่า ATR (M1) สูงสุดที่ยอมรับได้", value=config.get('max_atr_value', 150.0), step=10.0)
 
@@ -168,6 +163,25 @@ with c_switch:
 
 st.markdown("---")
 
+# 🚨 แผงควบคุมฉุกเฉิน (Panic Panel)
+st.markdown("### 🚨 แผงควบคุมฉุกเฉิน (Manual Override)")
+btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
+
+if btn_c1.button("💥 รวบปิดทุกไม้ทันที (Panic Close)", type="primary", use_container_width=True):
+    save_json("ui_command", {"action": "PANIC_CLOSE"})
+    st.toast("ส่งคำสั่งปิดทุกไม้เรียบร้อยแล้ว!", icon="🚨")
+
+if config.get("use_smart_dca", True):
+    if btn_c2.button("🛑 ระงับการยิงไม้แก้ (Pause DCA)", use_container_width=True):
+        save_json("ui_command", {"action": "PAUSE_DCA"})
+        st.toast("ส่งคำสั่งระงับ DCA ชั่วคราว!", icon="🛑")
+else:
+    if btn_c2.button("▶️ กลับมายิงไม้แก้ (Resume DCA)", use_container_width=True):
+        save_json("ui_command", {"action": "RESUME_DCA"})
+        st.toast("เปิดระบบ DCA ตามปกติ!", icon="▶️")
+
+st.markdown("---")
+
 # ==========================================
 # 🗂️ ส่วนแสดงผล (Tabs)
 # ==========================================
@@ -196,16 +210,16 @@ with tab1:
             pattern = details.get("pattern", "")
             if "Buy" in pattern: st.success(pattern)
             elif "Sell" in pattern: st.error(pattern)
-            elif "บล็อก" in pattern or "นอกเวลา" in pattern or "สเปรด" in pattern: st.warning(pattern)
+            elif "บล็อก" in pattern or "นอกเวลา" in pattern or "สเปรด" in pattern or "กระชาก" in pattern or "ข่าว" in pattern: st.warning(pattern)
             else: st.info(pattern)
             
             sc1, sc2, sc3 = st.columns(3)
             sc1.metric("เทรนด์หลัก (EMA 200)", f"{details.get('ema_200', 0):.2f}")
             sc2.metric("สเปรดปัจจุบัน", f"{details.get('current_spread', 0):.0f} Points")
-            sc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config['start_lot'])}")
+            sc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config.get('start_lot', 0.01))}")
             
             bounce_ratio = details.get("bounce_ratio", 0)
-            target_bounce = details.get("target_bounce", 0.4)
+            target_bounce = details.get("target_bounce", 0.35)
             progress_val = max(0.0, min((bounce_ratio / target_bounce) if target_bounce > 0 else 0, 1.0))
             
             st.write(f"**แรงเด้งกลับ (Bounce Ratio):** {bounce_ratio:.2f} / เป้าหมาย: {target_bounce:.2f}")
@@ -213,7 +227,7 @@ with tab1:
             
         elif live_data.get("mode") == "HOLDING":
             hc1, hc2, hc3 = st.columns(3)
-            hc1.metric("จำนวนไม้สะสม", f"{details.get('trades_count', 0)} / {config['max_positions']}")
+            hc1.metric("จำนวนไม้สะสม", f"{details.get('trades_count', 0)} / {config.get('max_positions', 3)}")
             
             pnl = details.get("total_pnl", 0)
             target = details.get("tp_target", 0)
@@ -227,10 +241,49 @@ with tab1:
             tp_progress = min(max(pnl / target, 0.0), 1.0) if target > 0 else 0
             st.progress(tp_progress)
 
+        # ----------------------------------------
+        # 📈 วาดกราฟแท่งเทียน (Live Candlestick)
+        # ----------------------------------------
+        chart_data = load_json("chart_data")
+        if chart_data and len(chart_data) > 0:
+            df_c = pd.DataFrame(chart_data)
+            
+            fig = go.Figure()
+            # 1. วาดแท่งเทียน
+            fig.add_trace(go.Candlestick(
+                x=df_c['time'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'],
+                name='Price'
+            ))
+            # 2. วาดเส้น EMA 200 (ถ้ามี)
+            if 'ema_200' in df_c.columns:
+                fig.add_trace(go.Scatter(
+                    x=df_c['time'], y=df_c['ema_200'], 
+                    mode='lines', line=dict(color='orange', width=2), name='EMA 200'
+                ))
+            
+            fig.update_layout(
+                title=f"📊 กราฟราคาล่าสุด {live_data.get('symbol', '')} พร้อม EMA 200",
+                yaxis_title="Price",
+                xaxis_rangeslider_visible=False,
+                height=450,
+                margin=dict(l=20, r=20, t=40, b=20),
+                template="plotly_dark"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
     render_live_dashboard()
 
 with tab2:
-    hist_data = load_json(HISTORY_FILE)
+    def load_history():
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r", encoding='utf-8') as f:
+                    return json.load(f)
+            except: pass
+        return []
+
+    hist_data = load_history()
+    
     if isinstance(hist_data, list) and len(hist_data) > 0:
         df_hist = pd.DataFrame(hist_data)
         total_profit = df_hist['กำไร/ขาดทุน'].sum()
@@ -250,7 +303,8 @@ with tab2:
         st.dataframe(df_hist_reversed, use_container_width=True)
         
         if st.button("🗑️ ล้างประวัติการเทรด"):
-            save_json(HISTORY_FILE, [])
+            with open(HISTORY_FILE, "w", encoding='utf-8') as f:
+                json.dump([], f)
             st.rerun()
     else:
         st.info("📭 ยังไม่มีประวัติการเทรด")

@@ -8,3 +8,6 @@ trade_history.json
 
 # ไฟล์ตั้งค่า (ที่มี Token ความลับ)
 config.json
+
+bot_data.sqlite
+bot_system.log

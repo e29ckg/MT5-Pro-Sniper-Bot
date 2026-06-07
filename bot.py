@@ -5,33 +5,23 @@ import json
 import os
 import requests
 import socket
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
-
-CONFIG_FILE = "config.json"
-LIVE_STATUS_FILE = "live_status.json"
+import core_db
 
 def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding='utf-8') as f:
-                return json.load(f)
-        except: pass
-    return None
+    # โหลดจากฐานข้อมูลแทนไฟล์
+    return core_db.load_db('config')
 
 def update_activity(config, msg):
+    # เซฟลงฐานข้อมูล
     config['current_activity'] = msg
-    try:
-        with open(CONFIG_FILE, "w", encoding='utf-8') as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
-    except: pass
+    core_db.save_db('config', config)
 
 def save_live_status(data):
+    # เซฟสถานะเรดาร์ลงฐานข้อมูล
     data['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        with open(LIVE_STATUS_FILE, "w", encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except: pass
+    core_db.save_db('live_status', data)
 
 def send_telegram_msg(config, message):
     if not config.get('telegram_enabled'): return
@@ -71,7 +61,7 @@ news_cache = {"data": [], "last_fetch": None}
 
 def check_news_impact():
     global news_cache
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     
     if news_cache["last_fetch"] is None or (now - news_cache["last_fetch"]).total_seconds() > 3600:
         try:
@@ -204,6 +194,23 @@ def main():
         if not config:
             time.sleep(2)
             continue
+
+        # 🚨 เช็คคำสั่งฉุกเฉินจากหน้าเว็บ (Panic Buttons)
+        cmd = core_db.load_db("ui_command")
+        if cmd and cmd.get("action"):
+            action = cmd["action"]
+            if action == "PANIC_CLOSE":
+                close_all_positions(config, symbol, magic_number, "กดปุ่มฉุกเฉิน รวบปิดทันที! 🚨")
+                basket_max_pnl = 0.0
+            elif action == "PAUSE_DCA":
+                config["use_smart_dca"] = False
+                update_activity(config, "หยุดยิงไม้แก้ (Pause DCA) ชั่วคราว!")
+            elif action == "RESUME_DCA":
+                config["use_smart_dca"] = True
+                update_activity(config, "กลับมายิงไม้แก้ตามปกติ")
+            
+            # เคลียร์คำสั่งทิ้งหลังจากทำเสร็จ
+            core_db.save_db("ui_command", {})
         
         is_running = config.get("bot_status") == "running"
         if is_running and not bot_was_running:
@@ -382,6 +389,13 @@ def main():
             
             if rates is not None and len(rates) >= 250:
                 df = pd.DataFrame(rates)
+
+                # 💡 [อัปเกรด] ดึง 60 แท่งล่าสุด เซฟลงฐานข้อมูลให้หน้าเว็บวาดกราฟ
+                df_chart = df.iloc[-60:].copy()
+                df_chart['time'] = pd.to_datetime(df_chart['time'], unit='s').astype(str)
+                # เซฟ EMA ไปด้วยเพื่อวาดลงกราฟ
+                df_chart['ema_200'] = df['close'].ewm(span=200, adjust=False).mean().iloc[-60:]
+                core_db.save_db("chart_data", df_chart.to_dict(orient="records"))
                 
                 # คำนวณอินดิเคเตอร์
                 df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
