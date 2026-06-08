@@ -57,8 +57,8 @@ def run_backtest():
     contract_size = sym_info.trade_contract_size
 
     # 🌟 ทุนเริ่มต้นและจำนวนแท่งที่ต้องการทดสอบ
-    INITIAL_BALANCE = 500.0 
-    BARS_TO_TEST = 10000 
+    INITIAL_BALANCE = 100.0 
+    BARS_TO_TEST = 500
 
     print(f"📥 กำลังโหลดกราฟย้อนหลัง {symbol} จำนวน {BARS_TO_TEST} แท่ง...")
     rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, BARS_TO_TEST)

@@ -5,28 +5,27 @@ import time
 from datetime import datetime
 
 # ==========================================
-# ⚙️ 1. ตั้งค่าพารามิเตอร์ที่จะให้บอทสุ่มหา (Grid Search)
+# ⚙️ 1. พารามิเตอร์สำหรับ "ทองคำ (XAUUSD)" ทุน 100 USD
 # ==========================================
-# 💡 เน้นสุ่มหาจุดสมดุลของโหมด Scalping (เล่นสั้น)
 PARAMS_GRID = {
-    'quick_profit_target': [4.0, 5.0, 6.0],        # เป้ากำไร (TP)
-    'max_drawdown_usd': [50.0, 70.0, 100.0],       # จุดตัดไฟ (SL)
-    'dca_step_usd': [200.0, 250.0, 300.0],         # ระยะยิงแก้ (USD)
-    'max_gap_usd': [300.0, 400.0],                 # ความกว้างของคลื่น
-    'min_bounce_ratio': [0.30, 0.35],              # เปอร์เซ็นต์แรงเด้ง
-    'max_atr_value': [100.0, 150.0],               # ค่าความผันผวนสูงสุด (ATR)
-    'trailing_start_usd': [2.5, 3.0]               # จุดเริ่มล็อกกำไร (Trailing)
+    'quick_profit_target': [2.0, 3.0],             # เป้ากำไร (TP)
+    'max_drawdown_usd': [15.0, 20.0],              # จุดตัดไฟ (SL) ไม่เกิน 20% ของพอร์ต
+    'dca_step_usd': [2.5, 3.5, 4.5],               # ระยะยิงไม้แก้ (ราคาทองขยับกี่เหรียญ)
+    'max_gap_usd': [3.0, 5.0, 7.0],                # ความกว้างของคลื่นสวิง
+    'min_bounce_ratio': [0.35, 0.40],              # เปอร์เซ็นต์การเด้งกลับ
+    'max_atr_value': [1.5, 2.0],                   # กรองความผันผวน (ATR ของทองจะอยู่ที่ 0.5 - 2.5)
+    'trailing_start_usd': [1.5, 2.0]               # จุดเริ่มล็อกกำไร
 }
 
 # ตั้งค่าคงที่สำหรับการทดสอบ
-SYMBOL = "BTCUSDm"
+SYMBOL = "XAUUSDm"
 TIMEFRAME = mt5.TIMEFRAME_M1
-BARS_TO_TEST = 10000           # จำลองย้อนหลัง 10,000 แท่ง
-INITIAL_BALANCE = 500.0        
+BARS_TO_TEST = 30000           # จำลองย้อนหลัง 30,000 แท่ง (ประมาณ 1 เดือนสำหรับ M1)
+INITIAL_BALANCE = 100.0        # ทุนตั้งต้น 100 USD
 START_LOT = 0.01
-DCA_LOT_MULT = 1.5
+DCA_LOT_MULT = 1.2             # ใช้ตัวคูณต่ำเพื่อความปลอดภัย
 MAX_POSITIONS = 3
-TRAILING_STEP = 1.0
+TRAILING_STEP = 0.5            # ระยะถอยย่อของ Trailing 
 
 # ==========================================
 # 🧠 2. ฟังก์ชันคำนวณอินดิเคเตอร์
@@ -106,7 +105,7 @@ def simulate_strategy(df, params, contract_size):
                 if balance <= 0: return balance, len(basket_history), 0
                 continue 
 
-            # Smart DCA ด้วย RSI
+            # Smart DCA ด้วย RSI (รอสุดเทรนด์)
             if len(positions) < MAX_POSITIONS and drag >= dca_step:
                 is_rsi_safe = True
                 if latest_pos['type'] == 'buy' and current_rsi > 30:
@@ -128,7 +127,7 @@ def simulate_strategy(df, params, contract_size):
             basket_max_pnl = 0.0
             
             if current_atr > max_atr:
-                continue # ข้ามถ้าราคากระชากแรง
+                continue # กรองกราฟกระชากแรง (ข่าว)
 
             closed_3_highs = df['high'].iloc[i-3:i].values
             closed_3_lows = df['low'].iloc[i-3:i].values
@@ -183,7 +182,7 @@ def simulate_strategy(df, params, contract_size):
 def run_optimizer():
     print("🤖 กำลังเชื่อมต่อ MT5...")
     if not mt5.initialize():
-        print("❌ เชื่อมต่อไม่ได้! โปรดเปิด MT5 ไว้")
+        print("❌ เชื่อมต่อไม่ได้! โปรดเปิด MT5 ไว้และ Login บัญชี Exness")
         return
 
     sym_info = mt5.symbol_info(SYMBOL)
@@ -193,7 +192,7 @@ def run_optimizer():
         return
     contract_size = sym_info.trade_contract_size
 
-    print(f"📥 กำลังโหลดข้อมูล {SYMBOL} จำนวน {BARS_TO_TEST} แท่ง... (ดึงครั้งเดียว)")
+    print(f"📥 กำลังโหลดข้อมูล {SYMBOL} จำนวน {BARS_TO_TEST} แท่งย้อนหลัง (ประมาณ 1 เดือน)...")
     rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, BARS_TO_TEST)
     mt5.shutdown()
     
@@ -210,20 +209,21 @@ def run_optimizer():
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
     total_combos = len(combinations)
     
-    print(f"🔍 พบการตั้งค่าที่ต้องทดสอบทั้งหมด {total_combos} รูปแบบ (อาจใช้เวลา 1-2 นาที...)")
+    print(f"🔍 พบรูปแบบการตั้งค่าที่ต้องทดสอบทั้งหมด {total_combos} รูปแบบ...")
+    print("⏳ อาจใช้เวลา 1-3 นาที โปรดรอสักครู่...")
     
     results = []
     start_time = time.time()
     
     for idx, params in enumerate(combinations):
-        if idx % 50 == 0:
-            print(f"⏳ ทดสอบไปแล้ว {idx}/{total_combos} รูปแบบ...")
+        if idx % 100 == 0 and idx > 0:
+            print(f"   ▶ ทดสอบไปแล้ว {idx}/{total_combos} รูปแบบ...")
             
         final_balance, trades, win_rate = simulate_strategy(df, params, contract_size)
         net_profit = final_balance - INITIAL_BALANCE
         
-        # กรองเฉพาะค่าที่เทรดมากกว่า 10 รอบ เพื่อหาความเสถียร
-        if trades >= 10:
+        # กรองเฉพาะรูปแบบที่มีการเทรดอย่างน้อย 5 รอบ (เพื่อให้มั่นใจว่าไม่ได้ฟลุ๊ค)
+        if trades >= 5:
             results.append({
                 'Profit': net_profit,
                 'WinRate': win_rate,
@@ -231,23 +231,23 @@ def run_optimizer():
                 'Params': params
             })
 
-    print(f"✅ ประมวลผลเสร็จสิ้น! ใช้เวลา {time.time() - start_time:.2f} วินาที\n")
+    print(f"\n✅ ประมวลผลเสร็จสิ้น! ใช้เวลา {time.time() - start_time:.2f} วินาที\n")
     
     if not results:
-        print("⚠️ ไม่พบการตั้งค่าไหนที่ทำกำไรและเทรดรอดเลย ลองขยายช่วงตัวเลขใน PARAMS_GRID ครับ")
+        print("⚠️ ไม่พบการตั้งค่าไหนที่ทำกำไรและอยู่รอดใน 1 เดือนที่ผ่านมาเลยครับ (ตลาดอาจโหดเกินไป หรือ Gap แคบไป)")
         return
         
-    # จัดอันดับตามกำไรสุทธิสูงสุด
+    # จัดอันดับตาม "กำไรสุทธิสูงสุด"
     results.sort(key=lambda x: x['Profit'], reverse=True)
     
-    print("🏆 TOP 5 การตั้งค่าที่ดีที่สุดสำหรับ BTC (โหมดเล่นสั้น):")
-    print("="*75)
+    print("🏆 TOP 5 ชุดตัวเลขที่ดีที่สุดสำหรับ XAUUSDm (ทุน 100 USD):")
+    print("="*80)
     for i, res in enumerate(results[:5]):
         p = res['Params']
-        print(f"🥇 อันดับที่ {i+1}: กำไรสุทธิ ${res['Profit']:.2f} | Win Rate: {res['WinRate']:.1f}% | เทรด: {res['Trades']} รอบ")
-        print(f"   ⚙️ ตั้งค่า: [TP: {p['quick_profit_target']} | SL: {p['max_drawdown_usd']} | Trail-Start: {p['trailing_start_usd']}]")
-        print(f"   ⚙️ ลอจิก: [DCA: {p['dca_step_usd']} | Gap: {p['max_gap_usd']} | Bounce: {p['min_bounce_ratio']} | ATR: {p['max_atr_value']}]")
-        print("-" * 75)
+        print(f"🥇 อันดับ {i+1}: กำไรสุทธิ {res['Profit']:+.2f} USD | ทุนจบที่ {INITIAL_BALANCE + res['Profit']:.2f} | Win Rate: {res['WinRate']:.1f}% | เทรด: {res['Trades']} รอบ")
+        print(f"   ⚙️ ตั้งค่า: [เป้า TP: {p['quick_profit_target']} | ตัดไฟ SL: {p['max_drawdown_usd']} | Trail-Start: {p['trailing_start_usd']}]")
+        print(f"   ⚙️ ลอจิก: [DCA: {p['dca_step_usd']} | Gap: {p['max_gap_usd']} | Bounce: {p['min_bounce_ratio']} | กรอง ATR: {p['max_atr_value']}]")
+        print("-" * 80)
         
 if __name__ == "__main__":
     run_optimizer()
