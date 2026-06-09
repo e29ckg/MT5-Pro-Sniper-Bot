@@ -29,19 +29,14 @@ if not config:
 # ==========================================
 st.set_page_config(page_title="MT5 Pro Sniper Bot", layout="wide", initial_sidebar_state="expanded")
 
-# ----------------------------------------
-# 🔒 ระบบตรวจสอบรหัสผ่าน (Login System)
-# ----------------------------------------
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
-
     if not st.session_state["password_correct"]:
         st.markdown("<br><br><br>", unsafe_allow_html=True)
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.markdown("<h2 style='text-align: center;'>🔒 เข้าสู่ระบบ MT5 Pro Bot</h2>", unsafe_allow_html=True)
-            st.info("💡 รหัสผ่านเริ่มต้นคือ: **admin123**")
             pwd = st.text_input("🔑 รหัสผ่าน (Password):", type="password")
             if st.button("🔓 เข้าสู่ระบบ (Login)", use_container_width=True):
                 if pwd == config.get("web_password", "admin123"):
@@ -54,6 +49,35 @@ def check_password():
 
 if not check_password():
     st.stop()
+
+# ==========================================
+# 🗂️ 2. ระบบ Profile Selector (เพิ่มใหม่)
+# ==========================================
+st.sidebar.header("🏆 เลือกกลยุทธ์ (Trading Profile)")
+
+PROFILES = {
+    "M1 Sniper (สายซิ่ง)": {
+        "timeframe": 1, "quick_profit_target": 2.0, "max_drawdown_usd": 20.0,
+        "dca_step_usd": 4.5, "max_gap_usd": 7.0, "min_bounce_ratio": 0.35,
+        "trailing_start_usd": 2.0, "trailing_step_usd": 1.0, "max_atr_value": 1.5
+    },
+    "M15 Swing (เน้นชัวร์)": {
+        "timeframe": 15, "quick_profit_target": 8.0, "max_drawdown_usd": 40.0,
+        "dca_step_usd": 15.0, "max_gap_usd": 20.0, "min_bounce_ratio": 0.30,
+        "trailing_start_usd": 6.0, "trailing_step_usd": 2.0, "max_atr_value": 4.0
+    },
+    "กำหนดเอง (Custom)": None
+}
+
+selected_profile = st.sidebar.selectbox("เลือกโหมดการเทรด", list(PROFILES.keys()), index=0)
+
+# อัปเดตค่า Config อัตโนมัติเมื่อเลือกโปรไฟล์
+if PROFILES[selected_profile] is not None:
+    for key, value in PROFILES[selected_profile].items():
+        config[key] = value
+    st.sidebar.success(f"✅ โหลดการตั้งค่า: {selected_profile} แล้ว!")
+
+st.sidebar.markdown("---")
 
 # ==========================================
 # ⚙️ เมนูตั้งค่าพารามิเตอร์ (Sidebar)
@@ -81,14 +105,12 @@ st.sidebar.header("🎯 4. เงื่อนไข X-Sniper V6")
 config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 400.0), step=10.0)
 config['min_bounce_ratio'] = st.sidebar.number_input("Min Bounce Ratio", value=config.get('min_bounce_ratio', 0.35), step=0.05)
 
-# 💡 [เพิ่มใหม่] Trailing Entry
-st.sidebar.header("🎯 4.1 Trailing Entry (จ้องตะปบเข้า)")
+st.sidebar.header("🎯 4.1 Trailing Entry")
 config['use_trailing_entry'] = st.sidebar.checkbox("เปิดใช้ Trailing Entry", value=config.get('use_trailing_entry', False))
 config['trailing_entry_step_usd'] = st.sidebar.number_input("ระยะงัดกลับถึงจะยิง ($)", value=config.get('trailing_entry_step_usd', 1.0), step=0.5)
-st.sidebar.caption("ถ้าราคาไหลต่อ บอทจะเลื่อนจุดรอเข้าตามไปเรื่อยๆ จนกว่ากราฟจะงัดกลับตามระยะนี้ถึงจะเข้าออเดอร์")
 
 st.sidebar.header("📈 5. ระบบกรองเทรนด์ (EMA 200)")
-config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter", value=config.get('use_ema_filter', True))
+config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter (จาก H1)", value=config.get('use_ema_filter', True))
 
 st.sidebar.header("🛡️ 6. ระบบกันหน้าทุน (Trailing Stop)")
 config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', True))
@@ -107,7 +129,7 @@ t_end = st.sidebar.time_input("เวลาหยุดเทรด", value=end_
 config['start_time'] = t_start.strftime('%H:%M')
 config['end_time'] = t_end.strftime('%H:%M')
 config['enable_clear_mode'] = st.sidebar.checkbox("พยายามปิดเท่าทุนเมื่อนอกเวลา", value=config.get('enable_clear_mode', True))
-config['enable_force_close'] = st.sidebar.checkbox("บังคับตัดออเดอร์ (Force Close)", value=config.get('enable_force_close', False))
+config['enable_force_close'] = st.sidebar.checkbox("บังคับตัดออเดอร์", value=config.get('enable_force_close', False))
 force_close_str = config.get('force_close_time', '23:50')
 force_t = datetime.datetime.strptime(force_close_str, '%H:%M').time()
 t_force = st.sidebar.time_input("เวลาบังคับตัดจบ", value=force_t)
@@ -127,9 +149,9 @@ config['telegram_token'] = st.sidebar.text_input("Bot Token", value=config.get('
 config['telegram_chat_id'] = st.sidebar.text_input("Chat ID", value=config.get('telegram_chat_id', ""))
 
 st.sidebar.markdown("---")
-st.sidebar.header("🔒 10. ความปลอดภัย (Security)")
-config['web_password'] = st.sidebar.text_input("เปลี่ยนรหัสผ่านเข้าเว็บ", value=config.get('web_password', 'admin123'), type="password")
-st.sidebar.caption("ตั้งรหัสผ่านที่เดายากๆ เพื่อป้องกันคนนอกเข้ามาปรับบอท")
+st.sidebar.header("🔒 10. ความปลอดภัย")
+config['web_password'] = st.sidebar.text_input("เปลี่ยนรหัสผ่าน", value=config.get('web_password', 'admin123'), type="password")
+
 save_json(CONFIG_FILE, config)
 
 # ==========================================
@@ -174,7 +196,7 @@ with tab1:
     def render_live_dashboard():
         live_data = load_json(LIVE_STATUS_FILE)
         fresh_config = load_json(CONFIG_FILE)
-        # 💡 นำแถบสีเขียวมาแสดงผลแบบ Real-time ตรงนี้
+        
         if fresh_config.get("bot_status") == "running":
             st.success(f"🟢 **กำลังทำงาน:** {fresh_config.get('current_activity', 'เตรียมความพร้อม...')}")
         else:
@@ -193,10 +215,19 @@ with tab1:
         
         st.markdown("---")
         mode = live_data.get('mode', '-')
+        
+        # 💡 [เพิ่มใหม่] โชว์เทรนด์หลักจาก H1 ให้เห็นชัดๆ และโปรไฟล์ที่ใช้อยู่
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("🏆 โปรไฟล์ปัจจุบัน", selected_profile.split(" ")[0])
+        trend_h1 = live_data.get("details", {}).get("trend_h1", "รอข้อมูล...")
+        b2.metric("📈 เทรนด์หลัก (H1)", f"🔥 {trend_h1}" if trend_h1 == "UP" else f"💧 {trend_h1}")
+        
         if mode == "TRAILING_ENTRY":
-            st.markdown(f"##### 🎯 สถานะบอท: <span style='color:orange;'>{mode} (กำลังง้างรอเข้าออเดอร์)</span>", unsafe_allow_html=True)
+            b3.markdown(f"**สถานะบอท:** <br><span style='color:orange;'>🎯 {mode} (กำลังง้าง)</span>", unsafe_allow_html=True)
         else:
-            st.markdown(f"##### 📡 สถานะบอท: {mode}")
+            b3.markdown(f"**สถานะบอท:** <br>📡 {mode}", unsafe_allow_html=True)
+            
+        b4.caption(f"⏱️ อัปเดตล่าสุด:<br>{live_data.get('last_update', '-')}", unsafe_allow_html=True)
 
         details = live_data.get("details", {})
         
@@ -208,7 +239,8 @@ with tab1:
             else: st.info(pattern)
             
             sc1, sc2, sc3 = st.columns(3)
-            sc1.metric("เทรนด์หลัก (EMA 200)", f"{details.get('ema_200', 0):.2f}")
+            # แก้จาก EMA 200 เดิม เป็นบอกว่าใช้ EMA H1 เป็นเกณฑ์
+            sc1.metric("เส้นประคอง (EMA H1)", f"{details.get('ema_h1', details.get('ema_200', 0)):.2f}")
             sc2.metric("สเปรดปัจจุบัน", f"{details.get('current_spread', 0):.0f} Points")
             sc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config.get('start_lot', 0.01))}")
             
@@ -220,7 +252,6 @@ with tab1:
             tc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config.get('start_lot', 0.01))}")
             
             progress = min(max(details.get('distance_to_entry', 0) / details.get('target_step', 1), 0.0), 1.0)
-            st.write("**ความคืบหน้าการงัดกลับ (Bounce Tracking):**")
             st.progress(progress)
 
         elif live_data.get("mode") == "HOLDING":
@@ -237,14 +268,35 @@ with tab1:
             tp_progress = min(max(pnl / target, 0.0), 1.0) if target > 0 else 0
             st.progress(tp_progress)
 
+        # ----------------------------------------
+        # 📈 วาดกราฟแท่งเทียน (Live Candlestick) พร้อมจุดเข้า
+        # ----------------------------------------
         chart_data = load_json("chart_data")
         if chart_data and len(chart_data) > 0:
             df_c = pd.DataFrame(chart_data)
             fig = go.Figure()
+            
+            # 1. แท่งเทียน
             fig.add_trace(go.Candlestick(x=df_c['time'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'], name='Price'))
-            if 'ema_200' in df_c.columns:
+            
+            # 2. 💡 [อัปเกรด] เส้น EMA 200 จะดึงของ H1 มาวาดถ้ามีข้อมูล
+            if 'ema_h1' in df_c.columns:
+                fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_h1'], mode='lines', line=dict(color='orange', width=2), name='EMA 200 (H1)'))
+            elif 'ema_200' in df_c.columns:
                 fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_200'], mode='lines', line=dict(color='orange', width=2), name='EMA 200'))
-            fig.update_layout(title=f"📊 กราฟราคาล่าสุด {live_data.get('symbol', '')} พร้อม EMA 200", yaxis_title="Price", xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=40, b=20), template="plotly_dark")
+            
+            # 3. วาดเส้นบอกจุดเข้าออเดอร์ (Buy/Sell)
+            open_trades = details.get("open_trades", [])
+            for trade in open_trades:
+                t_color = "#00ff00" if trade["type"] == "buy" else "#ff0000"
+                t_label = f" ◀ {trade['type'].upper()} ({trade['lot']}L) "
+                fig.add_hline(
+                    y=trade["price"], line_dash="dash", line_color=t_color, line_width=1.5,
+                    annotation_text=t_label, annotation_position="left", 
+                    annotation_font_color=t_color, annotation_font_size=12
+                )
+
+            fig.update_layout(title=f"📊 กราฟราคาล่าสุด {live_data.get('symbol', '')} พร้อม EMA (H1)", yaxis_title="Price", xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=40, b=20), template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
 
     render_live_dashboard()

@@ -158,7 +158,7 @@ def main():
     bot_was_running = False
     basket_max_pnl = 0.0
     last_force_close_date = None 
-    pending_entry = None # 💡 ตัวแปรจดจำสถานะ Trailing Entry
+    pending_entry = None
 
     while True:
         config = load_config()
@@ -182,7 +182,7 @@ def main():
             if action == "PANIC_CLOSE":
                 close_all_positions(config, symbol, magic_number, "กดปุ่มฉุกเฉิน รวบปิดทันที! 🚨", current_price)
                 basket_max_pnl = 0.0
-                pending_entry = None # ยกเลิกการง้างรอ
+                pending_entry = None 
             elif action == "PAUSE_DCA":
                 config["use_smart_dca"] = False
                 update_activity(config, "หยุดยิงไม้แก้ (Pause DCA) ชั่วคราว!")
@@ -225,7 +225,7 @@ def main():
         # ----------------------------------------
         if len(bot_positions) > 0:
             live_data["mode"] = "HOLDING"
-            pending_entry = None # รีเซ็ตการง้างรอทันทีที่มีของในมือ
+            pending_entry = None 
             latest_pos = bot_positions[-1]
             drag = (latest_pos.price_open - current_price) if latest_pos.type == mt5.ORDER_TYPE_BUY else (current_price - latest_pos.price_open)
             
@@ -256,9 +256,12 @@ def main():
             
             if total_pnl > basket_max_pnl: basket_max_pnl = total_pnl
             
+            open_trades = [{"type": "buy" if p.type == mt5.ORDER_TYPE_BUY else "sell", "price": p.price_open, "lot": p.volume} for p in bot_positions]
+            
             live_data["details"].update({
                 "trades_count": len(bot_positions), "total_pnl": total_pnl, "max_pnl_reached": basket_max_pnl,
-                "drag_usd": drag, "dca_step_target": config['dca_step_usd'], "tp_target": config['quick_profit_target']
+                "drag_usd": drag, "dca_step_target": config['dca_step_usd'], "tp_target": config['quick_profit_target'],
+                "open_trades": open_trades 
             })
             update_activity(config, f"ถืออยู่ {len(bot_positions)} ไม้ | PnL: ${total_pnl:.2f} | Max PnL: ${basket_max_pnl:.2f}")
             
@@ -291,34 +294,33 @@ def main():
                     update_activity(config, f"ถืออยู่ {len(bot_positions)} ไม้ | รอ RSI สุดเทรนด์ ({current_rsi_dca:.1f})")
 
         # ----------------------------------------
-        # 💡 [ใหม่] 2. โหมด Trailing Entry (จ้องตะปบเข้าไม้แรก)
+        # 2. โหมด Trailing Entry (จ้องตะปบเข้าไม้แรก)
         # ----------------------------------------
         elif pending_entry is not None:
             live_data["mode"] = "TRAILING_ENTRY"
             trail_step = config.get('trailing_entry_step_usd', 1.0)
             is_executed = False
             
-            # บันทึกราคาต่ำสุด/สูงสุด ที่กราฟไหลไปถึง
             if pending_entry['type'] == 'buy':
                 if current_price < pending_entry['extreme_price']:
                     pending_entry['extreme_price'] = current_price
                 elif current_price >= pending_entry['extreme_price'] + trail_step:
                     is_executed = True
-            else: # sell
+            else: 
                 if current_price > pending_entry['extreme_price']:
                     pending_entry['extreme_price'] = current_price
                 elif current_price <= pending_entry['extreme_price'] - trail_step:
                     is_executed = True
                     
-            # 🛡️ ป้องกันกราฟเปลี่ยนเทรนด์กะทันหันขณะง้างรอ
-            rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, 200)
-            if rates is not None:
-                current_ema = pd.DataFrame(rates)['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            # ดึงเทรนด์ H1 เพื่อป้องกันการง้างรอสวนเทรนด์หลัก
+            rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 210)
+            if rates_h1 is not None:
+                current_ema_h1 = pd.DataFrame(rates_h1)['close'].ewm(span=200, adjust=False).mean().iloc[-1]
                 if config.get('use_ema_filter', True):
-                    if pending_entry['type'] == 'buy' and current_price < current_ema:
-                        pending_entry = None # ยกเลิก ถ้าราคาร่วงหลุด EMA
-                    elif pending_entry['type'] == 'sell' and current_price > current_ema:
-                        pending_entry = None # ยกเลิก ถ้าราคาทะลุ EMA
+                    if pending_entry['type'] == 'buy' and current_price < current_ema_h1:
+                        pending_entry = None 
+                    elif pending_entry['type'] == 'sell' and current_price > current_ema_h1:
+                        pending_entry = None 
             
             if pending_entry:
                 distance = abs(current_price - pending_entry['extreme_price'])
@@ -333,7 +335,7 @@ def main():
                     send_order(config, symbol, pending_entry['type'], pending_entry['lot'], magic_number, current_price)
                     pending_entry = None
             else:
-                update_activity(config, "⚠️ ยกเลิกการตามรอย (กราฟเปลี่ยนเทรนด์)")
+                update_activity(config, "⚠️ ยกเลิกการตามรอย (กราฟเปลี่ยนเทรนด์ H1)")
 
         # ----------------------------------------
         # 3. โหมดค้นหาสัญญาณ (Scanning)
@@ -358,20 +360,33 @@ def main():
                 continue
                 
             update_activity(config, f"กำลังสแกนหาสัญญาณ X-Sniper...")
+            
+            # 💡 1. ดึงข้อมูลเทรนด์หลักจาก H1 (EMA 200)
+            rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 210)
+            ema_h1 = current_price
+            trend_status = "SIDEWAYS"
+            if rates_h1 is not None:
+                df_h1 = pd.DataFrame(rates_h1)
+                ema_h1_series = df_h1['close'].ewm(span=200, adjust=False).mean()
+                ema_h1 = ema_h1_series.iloc[-1]
+                trend_status = "UP" if current_price > ema_h1 else "DOWN"
+
+            # 💡 2. ดึงข้อมูลไทม์เฟรมเทรด
             rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, 300)
             
             if rates is not None and len(rates) >= 250:
                 df = pd.DataFrame(rates)
+                
+                # 💡 3. เตรียมข้อมูลวาดกราฟ (บวกเวลา +7 ชม. สำหรับประเทศไทย)
                 df_chart = df.iloc[-60:].copy()
-                df_chart['time'] = pd.to_datetime(df_chart['time'], unit='s').astype(str)
-                df_chart['ema_200'] = df['close'].ewm(span=200, adjust=False).mean().iloc[-60:]
+                df_chart['time'] = pd.to_datetime(df_chart['time'], unit='s') + pd.Timedelta(hours=7)
+                df_chart['time'] = df_chart['time'].dt.strftime('%H:%M:%S')
+                df_chart['ema_h1'] = ema_h1 # ส่งค่า EMA H1 ไปวาดในกราฟ
                 core_db.save_db("chart_data", df_chart.to_dict(orient="records"))
                 
-                df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
                 df['rsi_14'] = calculate_rsi(df['close'], 14)
                 df['atr_14'] = calculate_atr(df, 14)
                 
-                current_ema_200 = df['ema_200'].iloc[-1]
                 current_atr = df['atr_14'].iloc[-1]
                 
                 closed_3_highs = df['high'].iloc[-4:-1].values
@@ -381,9 +396,10 @@ def main():
                 kz10_low = df['low'].iloc[-7:-1].min()
                 kz10_high = df['high'].iloc[-7:-1].max()
                 
+                # 💡 4. กรองเทรนด์ด้วย EMA ของ H1
                 use_ema = config.get('use_ema_filter', True)
-                ema_buy_condition = (current_price > current_ema_200) if use_ema else True
-                ema_sell_condition = (current_price < current_ema_200) if use_ema else True
+                ema_buy_condition = (current_price > ema_h1) if use_ema else True
+                ema_sell_condition = (current_price < ema_h1) if use_ema else True
 
                 sym_info = mt5.symbol_info(symbol)
                 spread_points = (tick.ask - tick.bid) / sym_info.point if tick and sym_info else 0
@@ -399,9 +415,9 @@ def main():
 
                 next_lot = get_dynamic_lot(config)
                 scan_details = {
-                    "ema_200": float(current_ema_200), "current_spread": spread_points, "next_lot": next_lot,
-                    "pattern": warning_msg if not is_market_safe else "กำลังฟอร์มตัว...", "bounce_ratio": 0.0,
-                    "target_bounce": config.get('min_bounce_ratio', 0.35)
+                    "trend_h1": trend_status, "ema_h1": float(ema_h1), "current_spread": spread_points, 
+                    "next_lot": next_lot, "pattern": warning_msg if not is_market_safe else "กำลังฟอร์มตัว...", 
+                    "bounce_ratio": 0.0, "target_bounce": config.get('min_bounce_ratio', 0.35)
                 }
 
                 signal = None                
@@ -424,7 +440,6 @@ def main():
                 live_data["details"] = scan_details
 
                 if signal:
-                    # 💡 ถาเปิด Trailing Entry บอทจะง้างรอ ถ้าปิด จะยิงทันที
                     if config.get('use_trailing_entry', False):
                         pending_entry = {'type': signal, 'extreme_price': current_price, 'lot': next_lot}
                         update_activity(config, f"จับสัญญาณ {signal.upper()} ได้! เริ่มโหมดจ้องตะปบ (Trailing)")
