@@ -170,10 +170,30 @@ with c_switch:
 
 st.markdown("---")
 
+# 💡 สร้างตัวจำสถานะสำหรับการกดยืนยัน
+if "confirm_panic" not in st.session_state:
+    st.session_state.confirm_panic = False
+
 btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
-if btn_c1.button("💥 รวบปิดทุกไม้ทันที", type="primary", use_container_width=True):
-    save_json("ui_command", {"action": "PANIC_CLOSE"})
-    st.toast("ส่งคำสั่งปิดทุกไม้เรียบร้อยแล้ว!", icon="🚨")
+
+with btn_c1:
+    if not st.session_state.confirm_panic:
+        # ปุ่มตอนปกติ
+        if st.button("💥 รวบปิดทุกไม้ทันที", type="primary", use_container_width=True):
+            st.session_state.confirm_panic = True
+            st.rerun()
+    else:
+        # ⚠️ เมื่อกดปุ่มแล้ว จะเปลี่ยนเป็นโหมดถามยืนยัน
+        st.error("⚠️ แน่ใจหรือไม่?")
+        cc1, cc2 = st.columns(2)
+        if cc1.button("✅ ยืนยัน", type="primary", use_container_width=True):
+            save_json("ui_command", {"action": "PANIC_CLOSE"})
+            st.toast("ส่งคำสั่งปิดทุกไม้เรียบร้อยแล้ว!", icon="🚨")
+            st.session_state.confirm_panic = False
+            st.rerun()
+        if cc2.button("❌ ยกเลิก", use_container_width=True):
+            st.session_state.confirm_panic = False
+            st.rerun()
 
 if config.get("use_smart_dca", True):
     if btn_c2.button("🛑 ระงับการยิงไม้แก้", use_container_width=True):
