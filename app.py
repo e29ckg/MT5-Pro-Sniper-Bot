@@ -51,7 +51,7 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# 🗂️ 2. ระบบ Profile Selector (เพิ่มใหม่)
+# 🗂️ 2. ระบบ Profile Selector (อัจฉริยะ)
 # ==========================================
 st.sidebar.header("🏆 เลือกกลยุทธ์ (Trading Profile)")
 
@@ -59,7 +59,7 @@ PROFILES = {
     "M1 Sniper (สายซิ่ง)": {
         "timeframe": 1, "quick_profit_target": 2.0, "max_drawdown_usd": 20.0,
         "dca_step_usd": 4.5, "max_gap_usd": 7.0, "min_bounce_ratio": 0.35,
-        "trailing_start_usd": 2.0, "trailing_step_usd": 1.0, "max_atr_value": 1.5
+        "trailing_start_usd": 2.0, "trailing_step_usd": 1.0, "max_atr_value": 2.0
     },
     "M15 Swing (เน้นชัวร์)": {
         "timeframe": 15, "quick_profit_target": 8.0, "max_drawdown_usd": 40.0,
@@ -69,13 +69,42 @@ PROFILES = {
     "กำหนดเอง (Custom)": None
 }
 
-selected_profile = st.sidebar.selectbox("เลือกโหมดการเทรด", list(PROFILES.keys()), index=0)
+# 💡 เซตค่าเริ่มต้นครั้งแรก ถ้ายังไม่มีในฐานข้อมูล
+if "current_profile" not in config:
+    config["current_profile"] = "M1 Sniper (สายซิ่ง)"
+    for k, v in PROFILES["M1 Sniper (สายซิ่ง)"].items():
+        config[k] = v
+    save_json(CONFIG_FILE, config)
 
-# อัปเดตค่า Config อัตโนมัติเมื่อเลือกโปรไฟล์
-if PROFILES[selected_profile] is not None:
-    for key, value in PROFILES[selected_profile].items():
-        config[key] = value
-    st.sidebar.success(f"✅ โหลดการตั้งค่า: {selected_profile} แล้ว!")
+if "profile_selector" not in st.session_state:
+    st.session_state.profile_selector = config["current_profile"]
+
+# ฟังก์ชันจัดการเมื่อเปลี่ยนโปรไฟล์
+def on_profile_change():
+    new_prof = st.session_state.profile_selector
+    config["current_profile"] = new_prof
+    if PROFILES.get(new_prof) is not None:
+        for k, v in PROFILES[new_prof].items():
+            config[k] = v
+    save_json(CONFIG_FILE, config)
+
+# ฟังก์ชันจัดการเมื่อผู้ใช้ปรับตัวเลข "ด้วยตัวเอง" (เปลี่ยนเป็น Custom ทันที)
+def on_param_change():
+    st.session_state.profile_selector = "กำหนดเอง (Custom)"
+    config["current_profile"] = "กำหนดเอง (Custom)"
+    save_json(CONFIG_FILE, config)
+
+selected_profile = st.sidebar.selectbox(
+    "เลือกโหมดการเทรด", 
+    list(PROFILES.keys()), 
+    key="profile_selector",
+    on_change=on_profile_change
+)
+
+if selected_profile != "กำหนดเอง (Custom)":
+    st.sidebar.success(f"✅ โหลดการตั้งค่า: {selected_profile}")
+else:
+    st.sidebar.info("🛠️ โหมดกำหนดเอง (แก้ไขตัวเลขได้อิสระ)")
 
 st.sidebar.markdown("---")
 
@@ -85,62 +114,67 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 1. ตั้งค่าพื้นฐาน")
 config['symbol'] = st.sidebar.text_input("Symbol", config.get('symbol', 'XAUUSDm'))
 config['magic_number'] = int(st.sidebar.number_input("Magic Number", value=config.get('magic_number', 888888), step=1))
+
 tf_options = {1: "M1", 5: "M5", 15: "M15", 16385: "H1"}
 current_tf_name = tf_options.get(config.get('timeframe', 1), "M1")
-selected_tf_name = st.sidebar.selectbox("Timeframe", list(tf_options.values()), index=list(tf_options.values()).index(current_tf_name))
+# 💡 สังเกตว่าผมใส่ on_change=on_param_change ไว้ทุกช่อง
+selected_tf_name = st.sidebar.selectbox("Timeframe", list(tf_options.values()), index=list(tf_options.values()).index(current_tf_name), on_change=on_param_change)
 config['timeframe'] = [k for k, v in tf_options.items() if v == selected_tf_name][0]
 
 st.sidebar.header("🌟 2. การตั้งค่ากลยุทธ์")
-config['start_lot'] = st.sidebar.number_input("Start Lot (Base)", value=config.get('start_lot', 0.01), step=0.01)
-config['quick_profit_target'] = st.sidebar.number_input("Quick Profit Target ($)", value=config.get('quick_profit_target', 5.0), step=0.5)
-config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 70.0), step=1.0)
+config['start_lot'] = st.sidebar.number_input("Start Lot (Base)", value=config.get('start_lot', 0.01), step=0.01, on_change=on_param_change)
+config['quick_profit_target'] = st.sidebar.number_input("Quick Profit Target ($)", value=config.get('quick_profit_target', 5.0), step=0.5, on_change=on_param_change)
+config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 70.0), step=1.0, on_change=on_param_change)
 
 st.sidebar.header("🚑 3. โหมดแก้เกม (DCA)")
-config['max_positions'] = int(st.sidebar.number_input("Max Positions", value=config.get('max_positions', 3), step=1))
-config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 250.0), step=10.0)
-config['dca_lot_mult'] = st.sidebar.number_input("DCA Lot Multiplier", value=config.get('dca_lot_mult', 1.5), step=0.1)
-config['use_smart_dca'] = st.sidebar.checkbox("🧠 เปิดใช้ Smart DCA", value=config.get('use_smart_dca', True))
+config['max_positions'] = int(st.sidebar.number_input("Max Positions", value=config.get('max_positions', 3), step=1, on_change=on_param_change))
+config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 250.0), step=10.0, on_change=on_param_change)
+config['dca_lot_mult'] = st.sidebar.number_input("DCA Lot Multiplier", value=config.get('dca_lot_mult', 1.5), step=0.1, on_change=on_param_change)
+config['use_smart_dca'] = st.sidebar.checkbox("🧠 เปิดใช้ Smart DCA", value=config.get('use_smart_dca', True), on_change=on_param_change)
 
 st.sidebar.header("🎯 4. เงื่อนไข X-Sniper V6")
-config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 400.0), step=10.0)
-config['min_bounce_ratio'] = st.sidebar.number_input("Min Bounce Ratio", value=config.get('min_bounce_ratio', 0.35), step=0.05)
+config['max_gap_usd'] = st.sidebar.number_input("Max Gap (USD)", value=config.get('max_gap_usd', 400.0), step=10.0, on_change=on_param_change)
+config['min_bounce_ratio'] = st.sidebar.number_input("Min Bounce Ratio", value=config.get('min_bounce_ratio', 0.35), step=0.05, on_change=on_param_change)
 
 st.sidebar.header("🎯 4.1 Trailing Entry")
-config['use_trailing_entry'] = st.sidebar.checkbox("เปิดใช้ Trailing Entry", value=config.get('use_trailing_entry', False))
-config['trailing_entry_step_usd'] = st.sidebar.number_input("ระยะงัดกลับถึงจะยิง ($)", value=config.get('trailing_entry_step_usd', 1.0), step=0.5)
+config['use_trailing_entry'] = st.sidebar.checkbox("เปิดใช้ Trailing Entry", value=config.get('use_trailing_entry', False), on_change=on_param_change)
+config['trailing_entry_step_usd'] = st.sidebar.number_input("ระยะงัดกลับถึงจะยิง ($)", value=config.get('trailing_entry_step_usd', 1.0), step=0.5, on_change=on_param_change)
 
 st.sidebar.header("📈 5. ระบบกรองเทรนด์ (EMA 200)")
-config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter (จาก H1)", value=config.get('use_ema_filter', True))
+config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter (จาก H1)", value=config.get('use_ema_filter', True), on_change=on_param_change)
 
 st.sidebar.header("🛡️ 6. ระบบกันหน้าทุน (Trailing Stop)")
-config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', True))
-config['trailing_start_usd'] = st.sidebar.number_input("เริ่มล็อกเมื่อกำไรถึง ($)", value=config.get('trailing_start_usd', 3.0), step=0.5)
-config['trailing_step_usd'] = st.sidebar.number_input("ระยะถอยย่อ (Trailing Step $)", value=config.get('trailing_step_usd', 1.0), step=0.5)
+config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', True), on_change=on_param_change)
+config['trailing_start_usd'] = st.sidebar.number_input("เริ่มล็อกเมื่อกำไรถึง ($)", value=config.get('trailing_start_usd', 3.0), step=0.5, on_change=on_param_change)
+config['trailing_step_usd'] = st.sidebar.number_input("ระยะถอยย่อ (Trailing Step $)", value=config.get('trailing_step_usd', 1.0), step=0.5, on_change=on_param_change)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⏰ 7. ตั้งเวลาทำงาน")
-config['use_time_filter'] = st.sidebar.checkbox("จำกัดเวลาเข้าไม้แรก", value=config.get('use_time_filter', False))
+config['use_time_filter'] = st.sidebar.checkbox("จำกัดเวลาเข้าไม้แรก", value=config.get('use_time_filter', False), on_change=on_param_change)
+
 start_str = config.get('start_time', '08:00')
 end_str = config.get('end_time', '22:00')
 start_t = datetime.datetime.strptime(start_str, '%H:%M').time()
 end_t = datetime.datetime.strptime(end_str, '%H:%M').time()
-t_start = st.sidebar.time_input("เวลาเริ่มเทรด", value=start_t)
-t_end = st.sidebar.time_input("เวลาหยุดเทรด", value=end_t)
+t_start = st.sidebar.time_input("เวลาเริ่มเทรด", value=start_t, on_change=on_param_change)
+t_end = st.sidebar.time_input("เวลาหยุดเทรด", value=end_t, on_change=on_param_change)
 config['start_time'] = t_start.strftime('%H:%M')
 config['end_time'] = t_end.strftime('%H:%M')
-config['enable_clear_mode'] = st.sidebar.checkbox("พยายามปิดเท่าทุนเมื่อนอกเวลา", value=config.get('enable_clear_mode', True))
-config['enable_force_close'] = st.sidebar.checkbox("บังคับตัดออเดอร์", value=config.get('enable_force_close', False))
+
+config['enable_clear_mode'] = st.sidebar.checkbox("พยายามปิดเท่าทุนเมื่อนอกเวลา", value=config.get('enable_clear_mode', True), on_change=on_param_change)
+config['enable_force_close'] = st.sidebar.checkbox("บังคับตัดออเดอร์", value=config.get('enable_force_close', False), on_change=on_param_change)
+
 force_close_str = config.get('force_close_time', '23:50')
 force_t = datetime.datetime.strptime(force_close_str, '%H:%M').time()
-t_force = st.sidebar.time_input("เวลาบังคับตัดจบ", value=force_t)
+t_force = st.sidebar.time_input("เวลาบังคับตัดจบ", value=force_t, on_change=on_param_change)
 config['force_close_time'] = t_force.strftime('%H:%M')
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔥 8. ฟีเจอร์ระดับโปร")
-config['max_spread_points'] = st.sidebar.number_input("สเปรดสูงสุด (Points)", value=config.get('max_spread_points', 400), step=50)
-config['use_atr_filter'] = st.sidebar.checkbox("เปิดใช้ ATR Filter", value=config.get('use_atr_filter', True))
-config['max_atr_value'] = st.sidebar.number_input("ค่า ATR สูงสุด", value=config.get('max_atr_value', 150.0), step=10.0)
-config['use_news_filter'] = st.sidebar.checkbox("หลบข่าวกล่องแดง", value=config.get('use_news_filter', True))
+config['max_spread_points'] = st.sidebar.number_input("สเปรดสูงสุด (Points)", value=config.get('max_spread_points', 400), step=50, on_change=on_param_change)
+config['use_atr_filter'] = st.sidebar.checkbox("เปิดใช้ ATR Filter", value=config.get('use_atr_filter', True), on_change=on_param_change)
+config['max_atr_value'] = st.sidebar.number_input("ค่า ATR สูงสุด", value=config.get('max_atr_value', 150.0), step=10.0, on_change=on_param_change)
+config['use_news_filter'] = st.sidebar.checkbox("หลบข่าวกล่องแดง", value=config.get('use_news_filter', True), on_change=on_param_change)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📱 9. Telegram")
@@ -170,7 +204,7 @@ with c_switch:
 
 st.markdown("---")
 
-# 💡 สร้างตัวจำสถานะสำหรับการกดยืนยัน
+# 🚨 ระบบปุ่มฉุกเฉิน (เพิ่มระบบยืนยันก่อนปิดป้องกันมือกดลั่น)
 if "confirm_panic" not in st.session_state:
     st.session_state.confirm_panic = False
 
@@ -178,12 +212,10 @@ btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
 
 with btn_c1:
     if not st.session_state.confirm_panic:
-        # ปุ่มตอนปกติ
         if st.button("💥 รวบปิดทุกไม้ทันที", type="primary", use_container_width=True):
             st.session_state.confirm_panic = True
             st.rerun()
     else:
-        # ⚠️ เมื่อกดปุ่มแล้ว จะเปลี่ยนเป็นโหมดถามยืนยัน
         st.error("⚠️ แน่ใจหรือไม่?")
         cc1, cc2 = st.columns(2)
         if cc1.button("✅ ยืนยัน", type="primary", use_container_width=True):
@@ -236,9 +268,8 @@ with tab1:
         st.markdown("---")
         mode = live_data.get('mode', '-')
         
-        # 💡 [เพิ่มใหม่] โชว์เทรนด์หลักจาก H1 ให้เห็นชัดๆ และโปรไฟล์ที่ใช้อยู่
         b1, b2, b3, b4 = st.columns(4)
-        b1.metric("🏆 โปรไฟล์ปัจจุบัน", selected_profile.split(" ")[0])
+        b1.metric("🏆 โปรไฟล์ปัจจุบัน", config.get("current_profile", "Custom").split(" ")[0])
         trend_h1 = live_data.get("details", {}).get("trend_h1", "รอข้อมูล...")
         b2.metric("📈 เทรนด์หลัก (H1)", f"🔥 {trend_h1}" if trend_h1 == "UP" else f"💧 {trend_h1}")
         
@@ -259,7 +290,6 @@ with tab1:
             else: st.info(pattern)
             
             sc1, sc2, sc3 = st.columns(3)
-            # แก้จาก EMA 200 เดิม เป็นบอกว่าใช้ EMA H1 เป็นเกณฑ์
             sc1.metric("เส้นประคอง (EMA H1)", f"{details.get('ema_h1', details.get('ema_200', 0)):.2f}")
             sc2.metric("สเปรดปัจจุบัน", f"{details.get('current_spread', 0):.0f} Points")
             sc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config.get('start_lot', 0.01))}")
@@ -299,7 +329,7 @@ with tab1:
             # 1. แท่งเทียน
             fig.add_trace(go.Candlestick(x=df_c['time'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'], name='Price'))
             
-            # 2. 💡 [อัปเกรด] เส้น EMA 200 จะดึงของ H1 มาวาดถ้ามีข้อมูล
+            # 2. เส้น EMA 200 (H1)
             if 'ema_h1' in df_c.columns:
                 fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_h1'], mode='lines', line=dict(color='orange', width=2), name='EMA 200 (H1)'))
             elif 'ema_200' in df_c.columns:

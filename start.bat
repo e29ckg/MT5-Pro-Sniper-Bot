@@ -18,9 +18,8 @@ start "Bot_Backend" cmd /k "venv\Scripts\activate && python bot.py"
 echo [3/3] Starting Watchdog System...
 start "Watchdog_System" cmd /k "venv\Scripts\activate && python _watchdog.py"
 
-:: 3. เปิดสุนัขเฝ้ายาม
-echo [caddy] Starting Caddy...
-start "Caddy ..." cmd /k "caddy run"
+echo [3/3] Starting Caddy System...
+start "Caddy" cmd /k "caddy run"
 
 echo.
 echo All systems are UP! You can now access the dashboard in your browser.
