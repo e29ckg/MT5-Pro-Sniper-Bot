@@ -58,7 +58,7 @@ def run_backtest():
 
     # 🌟 ทุนเริ่มต้นและจำนวนแท่งที่ต้องการทดสอบ
     INITIAL_BALANCE = 100.0 
-    BARS_TO_TEST = 500
+    BARS_TO_TEST = 1000
 
     print(f"📥 กำลังโหลดกราฟย้อนหลัง {symbol} จำนวน {BARS_TO_TEST} แท่ง...")
     rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, BARS_TO_TEST)

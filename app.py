@@ -122,6 +122,7 @@ selected_tf_name = st.sidebar.selectbox("Timeframe", list(tf_options.values()), 
 config['timeframe'] = [k for k, v in tf_options.items() if v == selected_tf_name][0]
 
 st.sidebar.header("🌟 2. การตั้งค่ากลยุทธ์")
+config['initial_balance'] = st.sidebar.number_input("เงินทุนเริ่มต้น ($) [Initial Balance]", value=config.get('initial_balance', 100.0), step=10.0, on_change=on_param_change)
 config['start_lot'] = st.sidebar.number_input("Start Lot (Base)", value=config.get('start_lot', 0.01), step=0.01, on_change=on_param_change)
 config['quick_profit_target'] = st.sidebar.number_input("Quick Profit Target ($)", value=config.get('quick_profit_target', 5.0), step=0.5, on_change=on_param_change)
 config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 70.0), step=1.0, on_change=on_param_change)
@@ -238,7 +239,7 @@ else:
 
 st.markdown("---")
 
-tab1, tab2 = st.tabs(["📡 เรดาร์เรียลไทม์", "📊 ประวัติการเทรด"])
+tab1, tab2, tab3 = st.tabs(["📡 เรดาร์เรียลไทม์", "📊 ประวัติการเทรด", "🔬 จำลอง Backtest (ด้วยค่าจริง)"])
 
 with tab1:
     auto_refresh = st.toggle("🔄 เปิดโหมดดูเรียลไทม์ (Auto-Refresh 1 วินาที)")
@@ -367,3 +368,125 @@ with tab2:
         st.metric("💰 กำไรสุทธิรวม", f"${total_profit:.2f}")
         df_hist_reversed = df_hist.iloc[::-1].reset_index(drop=True)
         st.dataframe(df_hist_reversed, use_container_width=True)
+
+with tab3:
+    import MetaTrader5 as mt5
+    
+    st.markdown("### 🔬 จำลองการเทรดด้วยการตั้งค่าปัจจุบัน (Live Config Backtester)")
+    st.info(f"💡 ระบบจะใช้การตั้งค่าของโปรไฟล์ **{config.get('current_profile', 'Custom')}** ไปทดสอบย้อนหลัง")
+    
+    c_bars, c_btn = st.columns([1, 1])
+    test_bars = c_bars.number_input("จำนวนแท่งเทียนที่ต้องการทดสอบย้อนหลัง", value=5000, step=1000)
+    
+    if c_btn.button("🚀 เริ่มการจำลอง (Start Backtest)", type="primary", use_container_width=True):
+        if not mt5.initialize():
+            st.error("❌ เชื่อมต่อ MT5 ไม่สำเร็จ กรุณาเปิดโปรแกรม MT5 ไว้ด้วยครับ!")
+        else:
+            with st.spinner("⏳ กำลังดึงข้อมูลและประมวลผล..."):
+                # 1. ดึงการตั้งค่าสดๆ จากหน้าเว็บ (รวมทุนเริ่มต้น)
+                symbol = config.get('symbol', 'XAUUSDm')
+                timeframe_code = config.get('timeframe', 1)
+                start_lot = config.get('start_lot', 0.01)
+                target_usd = config.get('quick_profit_target', 5.0)
+                max_loss_usd = -abs(config.get('max_drawdown_usd', 70.0))
+                max_pos = config.get('max_positions', 3)
+                dca_step = config.get('dca_step_usd', 2.0)
+                dca_mult = config.get('dca_lot_mult', 1.5)
+                max_gap = config.get('max_gap_usd', 10.0)
+                min_bounce = config.get('min_bounce_ratio', 0.30)
+                
+                # 🌟 ดึงค่าเงินทุนเริ่มต้นที่ลูกพี่กรอกหน้าเว็บเข้ามาใช้ในลูปจำลอง
+                initial_balance = float(config.get('initial_balance', 100.0))
+                balance = initial_balance
+                
+                # 2. ดึงข้อมูลจาก MT5
+                rates = mt5.copy_rates_from_pos(symbol, timeframe_code, 0, test_bars)
+                mt5.shutdown()
+                
+                if rates is None or len(rates) < 100:
+                    st.error("❌ ดึงข้อมูลกราฟไม่สำเร็จ หรือข้อมูลน้อยเกินไป")
+                else:
+                    df = pd.DataFrame(rates)
+                    records = df.to_dict('records')
+                    
+                    # 3. เริ่มลูปจำลองการเทรด
+                    positions = []
+                    history_pnl = []
+                    equity_curve = [balance]
+                    is_bankrupt = False # ตัวแปรเช็คสถานะพอร์ตแตก
+                    
+                    for i in range(25, len(records)):
+                        curr_bar = records[i]
+                        
+                        # คำนวณ PnL ปัจจุบัน
+                        total_pnl = 0.0
+                        for p in positions:
+                            diff = (curr_bar['close'] - p['entry']) if p['type'] == 'buy' else (p['entry'] - curr_bar['close'])
+                            total_pnl += diff * 100 * p['lot'] # สมมติ Contract Size = 100
+                            
+                        # เช็คปิดตะกร้า (TP / SL)
+                        if len(positions) > 0:
+                            if total_pnl >= target_usd or total_pnl <= max_loss_usd:
+                                balance += total_pnl
+                                history_pnl.append(total_pnl)
+                                positions.clear()
+                                equity_curve.append(balance)
+                                
+                                # 💥 ระบบดักล้างพอร์ต (Margin Call) ของจริง
+                                if balance <= 0:
+                                    is_bankrupt = True
+                                    break # ทุนหมด ทำลายลูปหยุดเทสทันที!
+                                continue
+                                
+                        # เช็ค DCA
+                        if len(positions) > 0 and len(positions) < max_pos:
+                            last_p = positions[-1]
+                            drag = (last_p['entry'] - curr_bar['close']) if last_p['type'] == 'buy' else (curr_bar['close'] - last_p['entry'])
+                            if drag >= dca_step:
+                                positions.append({'type': last_p['type'], 'entry': curr_bar['close'], 'lot': last_p['lot'] * dca_mult})
+                                
+                        # เช็ค X-Sniper เข้าไม้แรก
+                        if len(positions) == 0:
+                            closed_5_highs = [records[idx]['high'] for idx in range(i-6, i-1)]
+                            closed_5_lows = [records[idx]['low'] for idx in range(i-6, i-1)]
+                            
+                            if closed_5_lows[2] == min(closed_5_lows): # Bottom X
+                                x_low = closed_5_lows[2]
+                                recent_high = max([records[idx]['high'] for idx in range(i-9, i-1)])
+                                drop = recent_high - x_low
+                                bounce = curr_bar['close'] - x_low
+                                ratio = bounce / drop if drop > 0 else 0
+                                
+                                if drop <= max_gap and ratio >= min_bounce:
+                                    positions.append({'type': 'buy', 'entry': curr_bar['open'], 'lot': start_lot})
+                                    
+                            elif closed_5_highs[2] == max(closed_5_highs): # Top X
+                                x_high = closed_5_highs[2]
+                                recent_low = min([records[idx]['low'] for idx in range(i-9, i-1)])
+                                pump = x_high - recent_low
+                                pullback = x_high - curr_bar['close']
+                                ratio = pullback / pump if pump > 0 else 0
+                                
+                                if pump <= max_gap and ratio >= min_bounce:
+                                    positions.append({'type': 'sell', 'entry': curr_bar['open'], 'lot': start_lot})
+
+                    # 4. สรุปผลหลังรันเสร็จ
+                    net_profit = balance - initial_balance
+                    win_trades = len([p for p in history_pnl if p > 0])
+                    loss_trades = len([p for p in history_pnl if p <= 0])
+                    total_trades = win_trades + loss_trades
+                    win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0
+                    
+                    if is_bankrupt:
+                        st.error("☠️ BACKTEST FAILED: MARGIN CALL (พอร์ตแตกเกลี้ยงก่อนทดสอบจบ!)")
+                    else:
+                        st.success("✅ จำลองการเทรดเสร็จสิ้น!")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("💰 กำไรสุทธิ", f"${net_profit:.2f}", f"จากทุน ${initial_balance}")
+                    col2.metric("🧺 จำนวนรอบเทรด", f"{total_trades} รอบ")
+                    col3.metric("🎯 Win Rate", f"{win_rate:.2f}%")
+                    col4.metric("🔴 โดนตัดไฟ (Loss)", f"{loss_trades} ครั้ง")
+                    
+                    st.markdown("##### 📈 กราฟการเติบโตของพอร์ต (Equity Curve)")
+                    st.line_chart(equity_curve)
