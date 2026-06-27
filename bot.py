@@ -341,14 +341,14 @@ def main():
                 elif current_price <= pending_entry['extreme_price'] - trail_step:
                     is_executed = True
                     
-            # ดึงเทรนด์ H1 เพื่อป้องกันการง้างรอสวนเทรนด์หลัก
-            rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 210)
-            if rates_h1 is not None:
-                current_ema_h1 = pd.DataFrame(rates_h1)['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            # ดึงเทรนด์ M5 เพื่อป้องกันการง้างรอสวนเทรนด์หลัก
+            rates_m5 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, 210)
+            if rates_m5 is not None:
+                current_ema_m5 = pd.DataFrame(rates_m5)['close'].ewm(span=200, adjust=False).mean().iloc[-1]
                 if config.get('use_ema_filter', True):
-                    if pending_entry['type'] == 'buy' and current_price < current_ema_h1:
+                    if pending_entry['type'] == 'buy' and current_price < current_ema_m5:
                         pending_entry = None 
-                    elif pending_entry['type'] == 'sell' and current_price > current_ema_h1:
+                    elif pending_entry['type'] == 'sell' and current_price > current_ema_m5:
                         pending_entry = None 
             
             if pending_entry:
@@ -400,14 +400,15 @@ def main():
                 
             update_activity(config, f"กำลังสแกนหาสัญญาณ X-Sniper...")
             
-            rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 210)
-            ema_h1 = current_price
+            # 🌟 เปลี่ยนไทม์เฟรมเทรนด์เป็น M5 เรียบร้อย
+            rates_m5 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, 210)
+            ema_m5 = current_price
             trend_status = "SIDEWAYS"
-            if rates_h1 is not None:
-                df_h1 = pd.DataFrame(rates_h1)
-                ema_h1_series = df_h1['close'].ewm(span=200, adjust=False).mean()
-                ema_h1 = ema_h1_series.iloc[-1]
-                trend_status = "UP" if current_price > ema_h1 else "DOWN"
+            if rates_m5 is not None:
+                df_m5 = pd.DataFrame(rates_m5)
+                ema_m5_series = df_m5['close'].ewm(span=200, adjust=False).mean()
+                ema_m5 = ema_m5_series.iloc[-1]
+                trend_status = "UP" if current_price > ema_m5 else "DOWN"
 
             rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, 300)
             
@@ -417,7 +418,7 @@ def main():
                 df_chart = df.iloc[-60:].copy()
                 df_chart['time'] = pd.to_datetime(df_chart['time'], unit='s') + pd.Timedelta(hours=7)
                 df_chart['time'] = df_chart['time'].dt.strftime('%H:%M:%S')
-                df_chart['ema_h1'] = ema_h1 
+                df_chart['ema_m5'] = ema_m5 # ส่งเข้ากราฟด้วยชื่อ _m5
                 core_db.save_db("chart_data", df_chart.to_dict(orient="records"))
                 
                 df['rsi_14'] = calculate_rsi(df['close'], 14)
@@ -433,8 +434,8 @@ def main():
                 kz10_high = df['high'].iloc[-7:-1].max()
                 
                 use_ema = config.get('use_ema_filter', True)
-                ema_buy_condition = (current_price > ema_h1) if use_ema else True
-                ema_sell_condition = (current_price < ema_h1) if use_ema else True
+                ema_buy_condition = (current_price > ema_m5) if use_ema else True
+                ema_sell_condition = (current_price < ema_m5) if use_ema else True
 
                 sym_info = mt5.symbol_info(symbol)
                 spread_points = (tick.ask - tick.bid) / sym_info.point if tick and sym_info else 0
@@ -450,7 +451,7 @@ def main():
 
                 next_lot = get_dynamic_lot(config)
                 scan_details = {
-                    "trend_h1": trend_status, "ema_h1": float(ema_h1), "current_spread": spread_points, 
+                    "trend_m5": trend_status, "ema_m5": float(ema_m5), "current_spread": spread_points, 
                     "next_lot": next_lot, "pattern": warning_msg if not is_market_safe else "กำลังฟอร์มตัว...", 
                     "bounce_ratio": 0.0, "target_bounce": config.get('min_bounce_ratio', 0.35)
                 }

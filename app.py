@@ -146,7 +146,7 @@ config['use_trailing_entry'] = st.sidebar.checkbox("เปิดใช้ Traili
 config['trailing_entry_step_usd'] = st.sidebar.number_input("ระยะงัดกลับถึงจะยิง ($)", value=config.get('trailing_entry_step_usd', 1.0), step=0.5, on_change=on_param_change)
 
 st.sidebar.header("📈 5. ระบบกรองเทรนด์ (EMA 200)")
-config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter (จาก H1)", value=config.get('use_ema_filter', True), on_change=on_param_change)
+config['use_ema_filter'] = st.sidebar.checkbox("เปิดใช้ EMA 200 Filter (จาก M5)", value=config.get('use_ema_filter', True), on_change=on_param_change)
 
 st.sidebar.header("🛡️ 6. ระบบกันหน้าทุน (Trailing Stop)")
 config['use_trailing'] = st.sidebar.checkbox("เปิดใช้งาน Trailing Stop", value=config.get('use_trailing', True), on_change=on_param_change)
@@ -275,8 +275,10 @@ with tab1:
         
         b1, b2, b3, b4 = st.columns(4)
         b1.metric("🏆 โปรไฟล์ปัจจุบัน", config.get("current_profile", "Custom").split(" ")[0])
-        trend_h1 = live_data.get("details", {}).get("trend_h1", "รอข้อมูล...")
-        b2.metric("📈 เทรนด์หลัก (H1)", f"🔥 {trend_h1}" if trend_h1 == "UP" else f"💧 {trend_h1}")
+        
+        # 🌟 แก้ไข: ดึงเทรนด์จาก M5 แทน H1
+        trend_m5 = live_data.get("details", {}).get("trend_m5", "รอข้อมูล...")
+        b2.metric("📈 เทรนด์หลัก (M5)", f"🔥 {trend_m5}" if trend_m5 == "UP" else f"💧 {trend_m5}")
         
         if mode == "TRAILING_ENTRY":
             b3.markdown(f"**สถานะบอท:** <br><span style='color:orange;'>🎯 {mode} (กำลังง้าง)</span>", unsafe_allow_html=True)
@@ -292,10 +294,12 @@ with tab1:
             if "Buy" in pattern: st.success(pattern)
             elif "Sell" in pattern: st.error(pattern)
             elif "บล็อก" in pattern or "สเปรด" in pattern or "ข่าว" in pattern: st.warning(pattern)
+            elif "พักเทรด" in pattern: st.error(pattern) # 🌟 เพิ่มสีแดงให้สถานะพักเทรดรายวัน
             else: st.info(pattern)
             
             sc1, sc2, sc3 = st.columns(3)
-            sc1.metric("เส้นประคอง (EMA H1)", f"{details.get('ema_h1', details.get('ema_200', 0)):.2f}")
+            # 🌟 แก้ไข: ดึงค่าเส้นประคองเป็น M5
+            sc1.metric("เส้นประคอง (EMA M5)", f"{details.get('ema_m5', details.get('ema_200', 0)):.2f}")
             sc2.metric("สเปรดปัจจุบัน", f"{details.get('current_spread', 0):.0f} Points")
             sc3.metric("ขนาด Lot ไม้ถัดไป", f"{details.get('next_lot', config.get('start_lot', 0.01))}")
             
@@ -334,9 +338,9 @@ with tab1:
             # 1. แท่งเทียน
             fig.add_trace(go.Candlestick(x=df_c['time'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'], name='Price'))
             
-            # 2. เส้น EMA 200 (H1)
-            if 'ema_h1' in df_c.columns:
-                fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_h1'], mode='lines', line=dict(color='orange', width=2), name='EMA 200 (H1)'))
+            # 2. เส้น EMA 200 (M5) 🌟 แก้ไขให้อ่านค่าจาก M5
+            if 'ema_m5' in df_c.columns:
+                fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_m5'], mode='lines', line=dict(color='orange', width=2), name='EMA 200 (M5)'))
             elif 'ema_200' in df_c.columns:
                 fig.add_trace(go.Scatter(x=df_c['time'], y=df_c['ema_200'], mode='lines', line=dict(color='orange', width=2), name='EMA 200'))
             
@@ -351,7 +355,8 @@ with tab1:
                     annotation_font_color=t_color, annotation_font_size=12
                 )
 
-            fig.update_layout(title=f"📊 กราฟราคาล่าสุด {live_data.get('symbol', '')} พร้อม EMA (H1)", yaxis_title="Price", xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=40, b=20), template="plotly_dark")
+            # 🌟 แก้ไข Title กราฟเป็น M5
+            fig.update_layout(title=f"📊 กราฟราคาล่าสุด {live_data.get('symbol', '')} พร้อม EMA (M5)", yaxis_title="Price", xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=40, b=20), template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
 
     render_live_dashboard()
