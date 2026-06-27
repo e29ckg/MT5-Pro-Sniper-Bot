@@ -419,6 +419,12 @@ with tab3:
                     st.error("❌ ดึงข้อมูลกราฟไม่สำเร็จ หรือข้อมูลน้อยเกินไป")
                 else:
                     df = pd.DataFrame(rates)
+                    
+                    # 🌟 [อัปเกรดใหม่] สร้างเส้น EMA 200 จำลองอ้างอิงจากไทม์เฟรม M5
+                    # ถ้าลูกพี่เทสบนกราฟ M1 จะต้องใช้ระยะ 1000 แท่ง (200 แท่ง * 5 นาที) เพื่อให้ได้ค่าเท่า M5 เป๊ะๆ
+                    tf_multiplier = 5 if timeframe_code == mt5.TIMEFRAME_M1 else 1 
+                    df['ema_proxy'] = df['close'].ewm(span=200 * tf_multiplier, adjust=False).mean()
+                    
                     records = df.to_dict('records')
                     
                     # 3. เริ่มลูปจำลองการเทรด
@@ -427,10 +433,12 @@ with tab3:
                     equity_curve = [balance]
                     is_bankrupt = False
                     
-                    # ตัวแปรสำหรับคุมวินัยรายวันย้อนหลัง
                     last_date = None
                     day_pnl = 0.0
                     daily_blocked = False
+                    
+                    # 🌟 ดึงสวิตช์เปิด/ปิด EMA จากหน้าเว็บ
+                    use_ema = config.get('use_ema_filter', True)
                     
                     for i in range(25, len(records)):
                         curr_bar = records[i]
@@ -441,48 +449,48 @@ with tab3:
                             last_date = bar_date
                             
                         if bar_date != last_date:
-                            day_pnl = 0.0        # รีเซ็ตกำไร/ขาดทุนสะสมของวัน
-                            daily_blocked = False # ปลดล็อกให้กลับมาเทรดได้ในวันใหม่
+                            day_pnl = 0.0       
+                            daily_blocked = False
                             last_date = bar_date
                         
-                        # คำนวณ PnL ของออเดอร์ที่ค้างอยู่ปัจจุบัน
                         total_pnl = 0.0
                         for p in positions:
                             diff = (curr_bar['close'] - p['entry']) if p['type'] == 'buy' else (p['entry'] - curr_bar['close'])
                             total_pnl += diff * 100 * p['lot']
                             
-                        # เช็คปิดตะกร้า (TP / SL)
                         if len(positions) > 0:
                             if total_pnl >= target_usd or total_pnl <= max_loss_usd:
                                 balance += total_pnl
-                                day_pnl += total_pnl # สะสมยอด PnL เข้าในวันนั้นๆ
+                                day_pnl += total_pnl 
                                 history_pnl.append(total_pnl)
                                 positions.clear()
                                 equity_curve.append(balance)
                                 
-                                # 🛑 ตรวจสอบว่าในวันนี้ทำกำไรครบหรือขาดทุนเกินลิมิตหรือยัง
                                 if day_pnl >= daily_profit_target or day_pnl <= -abs(daily_loss_limit):
-                                    daily_blocked = True # สั่งล็อกงดเข้าไม้แรกของวันที่เหลือทันที
+                                    daily_blocked = True 
                                 
-                                # ดักพอร์ตแตกเกลี้ยง
                                 if balance <= 0:
                                     is_bankrupt = True
                                     break
                                 continue
                                 
-                        # เช็ค DCA (ไม้แก้ยังสามารถยิงได้จนจบตะกร้าแม้จะติดบล็อกรายวัน เพื่อเคลียร์ไม้ค้าง)
                         if len(positions) > 0 and len(positions) < max_pos:
                             last_p = positions[-1]
                             drag = (last_p['entry'] - curr_bar['close']) if last_p['type'] == 'buy' else (curr_bar['close'] - last_p['entry'])
                             if drag >= dca_step:
                                 positions.append({'type': last_p['type'], 'entry': curr_bar['close'], 'lot': last_p['lot'] * dca_mult})
                                 
-                        # เช็ค X-Sniper เข้าไม้แรก (จะทำงานต่อเมื่อไม่ติดบล็อกวินัยรายวันเท่านั้น 🛡️)
+                        # 🎯 เช็ค X-Sniper + ระบบกรองเทรนด์ EMA M5
                         if len(positions) == 0 and not daily_blocked:
                             closed_5_highs = [records[idx]['high'] for idx in range(i-6, i-1)]
                             closed_5_lows = [records[idx]['low'] for idx in range(i-6, i-1)]
                             
-                            if closed_5_lows[2] == min(closed_5_lows): # Bottom X
+                            # 🌟 เช็คว่าราคาปัจจุบันอยู่บนหรือล่างเส้น EMA M5
+                            current_ema = curr_bar['ema_proxy']
+                            ema_buy_condition = (curr_bar['close'] > current_ema) if use_ema else True
+                            ema_sell_condition = (curr_bar['close'] < current_ema) if use_ema else True
+                            
+                            if closed_5_lows[2] == min(closed_5_lows) and ema_buy_condition: # 🟢 Bottom X + กรองเทรนด์ขาขึ้น
                                 x_low = closed_5_lows[2]
                                 recent_high = max([records[idx]['high'] for idx in range(i-9, i-1)])
                                 drop = recent_high - x_low
@@ -492,7 +500,7 @@ with tab3:
                                 if drop <= max_gap and ratio >= min_bounce:
                                     positions.append({'type': 'buy', 'entry': curr_bar['open'], 'lot': start_lot})
                                     
-                            elif closed_5_highs[2] == max(closed_5_highs): # Top X
+                            elif closed_5_highs[2] == max(closed_5_highs) and ema_sell_condition: # 🔴 Top X + กรองเทรนด์ขาลง
                                 x_high = closed_5_highs[2]
                                 recent_low = min([records[idx]['low'] for idx in range(i-21, i-1)])
                                 pump = x_high - recent_low
@@ -512,7 +520,7 @@ with tab3:
                     if is_bankrupt:
                         st.error("☠️ BACKTEST FAILED: MARGIN CALL (พอร์ตแตกเกลี้ยงก่อนทดสอบจบ!)")
                     else:
-                        st.success("✅ จำลองการเทรดพร้อมระบบวินัยเสร็จสิ้น!")
+                        st.success("✅ จำลองการเทรด (รวมกรองเทรนด์ M5) เสร็จสิ้น!")
                     
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("💰 กำไรสุทธิ", f"${net_profit:.2f}", f"จากทุน ${initial_balance}")
