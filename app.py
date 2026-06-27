@@ -127,6 +127,10 @@ config['start_lot'] = st.sidebar.number_input("Start Lot (Base)", value=config.g
 config['quick_profit_target'] = st.sidebar.number_input("Quick Profit Target ($)", value=config.get('quick_profit_target', 5.0), step=0.5, on_change=on_param_change)
 config['max_drawdown_usd'] = st.sidebar.number_input("Max Drawdown limit ($)", value=config.get('max_drawdown_usd', 70.0), step=1.0, on_change=on_param_change)
 
+st.sidebar.header("🛡️ 2.1 วินัยการเทรดประจำวัน")
+config['daily_profit_target'] = st.sidebar.number_input("เป้ากำไรรายวัน ($) [พักเมื่อครบ]", value=config.get('daily_profit_target', 50.0), step=5.0, on_change=on_param_change)
+config['daily_loss_limit'] = st.sidebar.number_input("ลิมิตขาดทุนรายวัน ($) [เลิกเมื่อถึง]", value=config.get('daily_loss_limit', 30.0), step=5.0, on_change=on_param_change)
+
 st.sidebar.header("🚑 3. โหมดแก้เกม (DCA)")
 config['max_positions'] = int(st.sidebar.number_input("Max Positions", value=config.get('max_positions', 3), step=1, on_change=on_param_change))
 config['dca_step_usd'] = st.sidebar.number_input("DCA Step (USD)", value=config.get('dca_step_usd', 250.0), step=10.0, on_change=on_param_change)
@@ -383,7 +387,7 @@ with tab3:
             st.error("❌ เชื่อมต่อ MT5 ไม่สำเร็จ กรุณาเปิดโปรแกรม MT5 ไว้ด้วยครับ!")
         else:
             with st.spinner("⏳ กำลังดึงข้อมูลและประมวลผล..."):
-                # 1. ดึงการตั้งค่าสดๆ จากหน้าเว็บ (รวมทุนเริ่มต้น)
+                # 1. ดึงการตั้งค่าสดๆ จากหน้าเว็บ
                 symbol = config.get('symbol', 'XAUUSDm')
                 timeframe_code = config.get('timeframe', 1)
                 start_lot = config.get('start_lot', 0.01)
@@ -394,9 +398,12 @@ with tab3:
                 dca_mult = config.get('dca_lot_mult', 1.5)
                 max_gap = config.get('max_gap_usd', 10.0)
                 min_bounce = config.get('min_bounce_ratio', 0.30)
-                
-                # 🌟 ดึงค่าเงินทุนเริ่มต้นที่ลูกพี่กรอกหน้าเว็บเข้ามาใช้ในลูปจำลอง
                 initial_balance = float(config.get('initial_balance', 100.0))
+                
+                # 🌟 ดึงค่าวินัยรายวันจาก Dashboard
+                daily_profit_target = float(config.get('daily_profit_target', 50.0))
+                daily_loss_limit = float(config.get('daily_loss_limit', 30.0))
+                
                 balance = initial_balance
                 
                 # 2. ดึงข้อมูลจาก MT5
@@ -413,40 +420,60 @@ with tab3:
                     positions = []
                     history_pnl = []
                     equity_curve = [balance]
-                    is_bankrupt = False # ตัวแปรเช็คสถานะพอร์ตแตก
+                    is_bankrupt = False
+                    
+                    # ตัวแปรสำหรับคุมวินัยรายวันย้อนหลัง
+                    last_date = None
+                    day_pnl = 0.0
+                    daily_blocked = False
                     
                     for i in range(25, len(records)):
                         curr_bar = records[i]
                         
-                        # คำนวณ PnL ปัจจุบัน
+                        # 📅 ตรวจสอบการเปลี่ยนวันเพื่อรีเซ็ตวินัยประจำวัน
+                        bar_date = datetime.datetime.fromtimestamp(curr_bar['time']).date()
+                        if last_date is None:
+                            last_date = bar_date
+                            
+                        if bar_date != last_date:
+                            day_pnl = 0.0        # รีเซ็ตกำไร/ขาดทุนสะสมของวัน
+                            daily_blocked = False # ปลดล็อกให้กลับมาเทรดได้ในวันใหม่
+                            last_date = bar_date
+                        
+                        # คำนวณ PnL ของออเดอร์ที่ค้างอยู่ปัจจุบัน
                         total_pnl = 0.0
                         for p in positions:
                             diff = (curr_bar['close'] - p['entry']) if p['type'] == 'buy' else (p['entry'] - curr_bar['close'])
-                            total_pnl += diff * 100 * p['lot'] # สมมติ Contract Size = 100
+                            total_pnl += diff * 100 * p['lot']
                             
                         # เช็คปิดตะกร้า (TP / SL)
                         if len(positions) > 0:
                             if total_pnl >= target_usd or total_pnl <= max_loss_usd:
                                 balance += total_pnl
+                                day_pnl += total_pnl # สะสมยอด PnL เข้าในวันนั้นๆ
                                 history_pnl.append(total_pnl)
                                 positions.clear()
                                 equity_curve.append(balance)
                                 
-                                # 💥 ระบบดักล้างพอร์ต (Margin Call) ของจริง
+                                # 🛑 ตรวจสอบว่าในวันนี้ทำกำไรครบหรือขาดทุนเกินลิมิตหรือยัง
+                                if day_pnl >= daily_profit_target or day_pnl <= -abs(daily_loss_limit):
+                                    daily_blocked = True # สั่งล็อกงดเข้าไม้แรกของวันที่เหลือทันที
+                                
+                                # ดักพอร์ตแตกเกลี้ยง
                                 if balance <= 0:
                                     is_bankrupt = True
-                                    break # ทุนหมด ทำลายลูปหยุดเทสทันที!
+                                    break
                                 continue
                                 
-                        # เช็ค DCA
+                        # เช็ค DCA (ไม้แก้ยังสามารถยิงได้จนจบตะกร้าแม้จะติดบล็อกรายวัน เพื่อเคลียร์ไม้ค้าง)
                         if len(positions) > 0 and len(positions) < max_pos:
                             last_p = positions[-1]
                             drag = (last_p['entry'] - curr_bar['close']) if last_p['type'] == 'buy' else (curr_bar['close'] - last_p['entry'])
                             if drag >= dca_step:
                                 positions.append({'type': last_p['type'], 'entry': curr_bar['close'], 'lot': last_p['lot'] * dca_mult})
                                 
-                        # เช็ค X-Sniper เข้าไม้แรก
-                        if len(positions) == 0:
+                        # เช็ค X-Sniper เข้าไม้แรก (จะทำงานต่อเมื่อไม่ติดบล็อกวินัยรายวันเท่านั้น 🛡️)
+                        if len(positions) == 0 and not daily_blocked:
                             closed_5_highs = [records[idx]['high'] for idx in range(i-6, i-1)]
                             closed_5_lows = [records[idx]['low'] for idx in range(i-6, i-1)]
                             
@@ -462,7 +489,7 @@ with tab3:
                                     
                             elif closed_5_highs[2] == max(closed_5_highs): # Top X
                                 x_high = closed_5_highs[2]
-                                recent_low = min([records[idx]['low'] for idx in range(i-9, i-1)])
+                                recent_low = min([records[idx]['low'] for idx in range(i-21, i-1)])
                                 pump = x_high - recent_low
                                 pullback = x_high - curr_bar['close']
                                 ratio = pullback / pump if pump > 0 else 0
@@ -470,7 +497,7 @@ with tab3:
                                 if pump <= max_gap and ratio >= min_bounce:
                                     positions.append({'type': 'sell', 'entry': curr_bar['open'], 'lot': start_lot})
 
-                    # 4. สรุปผลหลังรันเสร็จ
+                    # 4. สรุปผล
                     net_profit = balance - initial_balance
                     win_trades = len([p for p in history_pnl if p > 0])
                     loss_trades = len([p for p in history_pnl if p <= 0])
@@ -480,7 +507,7 @@ with tab3:
                     if is_bankrupt:
                         st.error("☠️ BACKTEST FAILED: MARGIN CALL (พอร์ตแตกเกลี้ยงก่อนทดสอบจบ!)")
                     else:
-                        st.success("✅ จำลองการเทรดเสร็จสิ้น!")
+                        st.success("✅ จำลองการเทรดพร้อมระบบวินัยเสร็จสิ้น!")
                     
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("💰 กำไรสุทธิ", f"${net_profit:.2f}", f"จากทุน ${initial_balance}")

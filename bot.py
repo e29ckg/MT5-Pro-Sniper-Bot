@@ -215,13 +215,42 @@ def main():
         bot_positions.sort(key=lambda x: x.ticket) 
         total_pnl = sum([(p.profit + p.swap) for p in bot_positions])
 
+        # 🌟 ==========================================
+        # 🛡️ ระบบตรวจสอบวินัยการเทรดประจำวัน (Daily Prop Firm Limit)
+        # ==========================================
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        history_deals = mt5.history_deals_get(today_start, datetime.now())
+        
+        today_pnl = 0.0
+        if history_deals:
+            for deal in history_deals:
+                if deal.magic == int(magic_number):
+                    today_pnl += (deal.profit + deal.commission + deal.swap)
+        
+        daily_blocked = False
+        block_reason = ""
+        daily_profit_target = config.get('daily_profit_target', 50.0)
+        daily_loss_limit = -abs(config.get('daily_loss_limit', 30.0))
+
+        if today_pnl >= daily_profit_target:
+            daily_blocked = True
+            block_reason = f"บรรลุเป้าหมายรายวัน (+${today_pnl:.2f})"
+        elif today_pnl <= daily_loss_limit:
+            daily_blocked = True
+            block_reason = f"ทะลุลิมิตขาดทุนรายวัน (${today_pnl:.2f})"
+            
+        # เคลียร์ pending entry ทันทีถ้าโดนบล็อกวินัยรายวัน
+        if daily_blocked and len(bot_positions) == 0 and pending_entry is not None:
+            pending_entry = None
+            update_activity(config, f"⚠️ ยกเลิกออเดอร์รอยิง: {block_reason}")
+
         live_data = {
             "status": "running", "symbol": symbol, "current_price": current_price,
             "balance": current_balance, "equity": current_equity, "mode": "", "details": {}
         }
         
         # ----------------------------------------
-        # 1. โหมดถือออเดอร์ (Holding)
+        # 1. โหมดถือออเดอร์ (Holding) - ยิงไม้แก้และปิดกำไรได้ตามปกติ
         # ----------------------------------------
         if len(bot_positions) > 0:
             live_data["mode"] = "HOLDING"
@@ -343,6 +372,16 @@ def main():
         else:
             basket_max_pnl = 0.0 
             live_data["mode"] = "SCANNING"
+            
+            # 🛑 ติดบล็อก Daily Limit หรือ Profit Target
+            if daily_blocked:
+                msg_block = f"🛑 พักเทรด: {block_reason}"
+                update_activity(config, msg_block)
+                live_data["details"] = {"pattern": msg_block}
+                save_live_status(live_data)
+                time.sleep(2)
+                continue
+            
             current_t = datetime.now().time()
             is_trading_time = True
             
@@ -361,7 +400,6 @@ def main():
                 
             update_activity(config, f"กำลังสแกนหาสัญญาณ X-Sniper...")
             
-            # 💡 1. ดึงข้อมูลเทรนด์หลักจาก H1 (EMA 200)
             rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 210)
             ema_h1 = current_price
             trend_status = "SIDEWAYS"
@@ -371,17 +409,15 @@ def main():
                 ema_h1 = ema_h1_series.iloc[-1]
                 trend_status = "UP" if current_price > ema_h1 else "DOWN"
 
-            # 💡 2. ดึงข้อมูลไทม์เฟรมเทรด
             rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, 300)
             
             if rates is not None and len(rates) >= 250:
                 df = pd.DataFrame(rates)
                 
-                # 💡 3. เตรียมข้อมูลวาดกราฟ (บวกเวลา +7 ชม. สำหรับประเทศไทย)
                 df_chart = df.iloc[-60:].copy()
                 df_chart['time'] = pd.to_datetime(df_chart['time'], unit='s') + pd.Timedelta(hours=7)
                 df_chart['time'] = df_chart['time'].dt.strftime('%H:%M:%S')
-                df_chart['ema_h1'] = ema_h1 # ส่งค่า EMA H1 ไปวาดในกราฟ
+                df_chart['ema_h1'] = ema_h1 
                 core_db.save_db("chart_data", df_chart.to_dict(orient="records"))
                 
                 df['rsi_14'] = calculate_rsi(df['close'], 14)
@@ -396,7 +432,6 @@ def main():
                 kz10_low = df['low'].iloc[-7:-1].min()
                 kz10_high = df['high'].iloc[-7:-1].max()
                 
-                # 💡 4. กรองเทรนด์ด้วย EMA ของ H1
                 use_ema = config.get('use_ema_filter', True)
                 ema_buy_condition = (current_price > ema_h1) if use_ema else True
                 ema_sell_condition = (current_price < ema_h1) if use_ema else True
