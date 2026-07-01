@@ -291,6 +291,36 @@ def force_close_all_positions(symbol, magic_number):
         mt5.order_send(request)
     return True
 
+def report_closed_trade(config, ticket, symbol, current_price):
+    """ฟังก์ชันดึงประวัติออเดอร์ที่เพิ่งปิด และส่งแจ้งเตือน Telegram"""
+    # ดึงประวัติการทำรายการ (Deals) ทั้งหมดที่เกี่ยวข้องกับ Ticket นี้
+    deals = mt5.history_deals_get(position=ticket)
+    if deals is None or len(deals) == 0:
+        return
+    
+    # รวมผลกำไร, Swap, และค่าคอมมิชชั่น ของทุก Deal ในไม้นี้
+    total_profit = sum([d.profit + d.swap + d.commission for d in deals])
+    
+    if total_profit > 0:
+        status = "🟢 ปิดทำกำไร (Win/Trailing Stop)"
+    elif total_profit < 0:
+        status = "🔴 ปิดขาดทุน (Stop Loss)"
+    else:
+        status = "⚪ เสมอตัว (Break-Even)"
+        
+    msg = (
+        f"🔔 อัปเดตสถานะ: บอทปิดออเดอร์แล้ว!\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"สัญลักษณ์: {symbol}\n"
+        f"สถานะ: {status}\n"
+        f"ผลประกอบการสุทธิ: ${total_profit:.2f}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🤖 ระบบกลับสู่โหมดสแกนหาจุดเข้าใหม่..."
+    )
+    
+    update_activity(config, f"ออเดอร์ {ticket} ถูกปิด | ผลลัพธ์: ${total_profit:.2f}")
+    send_telegram_msg(config, msg, current_price)
+
 # ==========================================
 # 🚀 ลูปการทำงานหลัก (Main Loop)
 # ==========================================
@@ -299,9 +329,10 @@ def main():
     if not mt5.initialize():
         print("❌ ไม่สามารถเชื่อมต่อ MT5 ได้")
         return
-        
-    while True:       
 
+    current_ticket = 0
+
+    while True:   
         config = load_config()
         if not config or config.get("bot_status") != "running":
             save_live_status({"status": "stopped", "mode": "STANDBY", "details": {"ai_reason": "บอทกำลังพักผ่อน"}})
@@ -381,6 +412,7 @@ def main():
             total_pnl = sum([(p.profit + p.swap) for p in bot_positions])
             
             pos = bot_positions[-1] 
+            current_ticket = pos.ticket
             
             # --- 🛡️ ระบบล็อกกำไร (Dynamic Break-Even & Step Trailing) ---
             use_profit_lock = config.get('use_profit_lock', True)
@@ -478,6 +510,13 @@ def main():
         else:
             live_data["mode"] = "SCANNING"
             is_market_safe = True
+
+            # 🌟 เช็คว่าก่อนหน้านี้ถือออเดอร์อยู่ แล้วเพิ่งหายไปใช่หรือไม่?
+            if current_ticket != 0:
+                # แปลว่าออเดอร์เพิ่งถูกปิดไปสดๆ ร้อนๆ!
+                report_closed_trade(config, current_ticket, symbol, current_price)
+                current_ticket = 0  # 🌟 รีเซ็ตความจำให้เป็น 0 เตรียมรับไม้ใหม่
+                time.sleep(2) # หน่วงเวลาให้ส่งข้อความเสร็จ
             
             # 🌟 ถ้านอกเวลาเทรด ห้ามเปิดออเดอร์ใหม่
             if not can_trade:
