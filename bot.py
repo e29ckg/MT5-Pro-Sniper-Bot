@@ -166,8 +166,8 @@ def ask_gemini(api_key, model_name, chart_h1, chart_m5, current_price, current_s
         
     try:
         client = genai.Client(api_key=api_key)
-        img_h1 = Image.open(img_h1_path)
-        img_m5 = Image.open(img_m5_path)
+        img_h1 = Image.open(chart_h1)
+        img_m5 = Image.open(chart_m5)
         
         # แกะข้อมูลแนวรับแนวต้าน
         d1_res, d1_sup, h4_res, h4_sup = sr_data
