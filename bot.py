@@ -49,6 +49,77 @@ def get_dynamic_lot(config):
     # ปรับ Lot อัตโนมัติ (สามารถเขียนสูตร MM เพิ่มเติมตรงนี้ได้)
     return base_lot
 
+# ตัวแปร Global สำหรับเก็บแคชข่าว จะได้ไม่โหลดซ้ำถี่เกินไป
+cached_news_data = None
+last_news_fetch_time = None
+
+def get_forexfactory_news():
+    """ดึงข้อมูลปฏิทินข่าวสัปดาห์นี้จาก API ของ ForexFactory"""
+    global cached_news_data, last_news_fetch_time
+    now = datetime.now()
+    
+    # อัปเดตข่าวทุกๆ 4 ชั่วโมง หรือเมื่อยังไม่มีข้อมูล
+    if cached_news_data is None or last_news_fetch_time is None or (now - last_news_fetch_time).total_seconds() > 14400:
+        try:
+            url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                cached_news_data = response.json()
+                last_news_fetch_time = now
+                print("📰 [News] อัปเดตข้อมูลข่าวสารสำเร็จ")
+        except Exception as e:
+            print(f"❌ ดึงข้อมูลข่าวขัดข้อง: {e}")
+            if cached_news_data is None:
+                cached_news_data = []
+                
+    return cached_news_data
+
+def is_safe_from_news(config):
+    """ตรวจสอบว่าเวลาปัจจุบันปลอดภัยจากข่าวแดงหรือไม่"""
+    use_news = config.get('use_news_filter', True)
+    if not use_news:
+        return True, ""
+
+    currency = config.get('news_currency', 'USD').upper()
+    pause_before = config.get('news_pause_before', 30)
+    pause_after = config.get('news_pause_after', 30)
+
+    news_data = get_forexfactory_news()
+    if not news_data:
+        return True, ""
+
+    # ดึงเวลาปัจจุบันที่แนบโซนเวลา (Timezone Aware)
+    now = datetime.now().astimezone()
+
+    for event in news_data:
+        # สนใจเฉพาะข่าวกล่องแดง (High) และตรงกับสกุลเงินที่ระบุ
+        if event.get('impact') == 'High' and event.get('country') == currency:
+            try:
+                # ตัวอย่าง: "2024-04-10T08:30:00-04:00"
+                event_time = datetime.fromisoformat(event['date'])
+                
+                # คำนวณความห่างเวลา (นาที) 
+                # (บวกแปลว่าข่าวอยู่ข้างหน้า, ลบแปลว่าข่าวผ่านไปแล้ว)
+                diff_minutes = (event_time - now).total_seconds() / 60.0
+                
+                # เช็คว่าเราอยู่ใน "พื้นที่อันตราย" หรือไม่
+                if -pause_after <= diff_minutes <= pause_before:
+                    
+                    # คำนวณเวลาที่ต้องรอ
+                    if diff_minutes > 0:
+                        wait_time = int(diff_minutes + pause_after)
+                        status_str = "ข่าวจะมาในอีก"
+                    else:
+                        wait_time = int(pause_after + diff_minutes)
+                        status_str = "เพิ่งผ่านข่าวไป รอสเปรดนิ่งอีก"
+                        
+                    msg = f"หลบข่าวแดง '{event['title']}' | {status_str} {wait_time} นาที"
+                    return False, msg
+            except Exception as e:
+                pass
+                
+    return True, ""
+
 # ==========================================
 # 🧠 ฟังก์ชัน Gemini AI Core
 # ==========================================
@@ -404,6 +475,30 @@ def main():
             time.sleep(2)
             continue # ปิดเสร็จให้ข้ามลูปไปเลย รอจนกว่าจะถึงเช้าวันใหม่
 
+        # ==========================================
+        # 💥 ระบบรับคำสั่งปิดฉุกเฉินจากหน้าเว็บ (Panic Close)
+        # ==========================================
+        ui_command = core_db.load_db("ui_command")
+        if ui_command and ui_command.get("action") == "PANIC_CLOSE":
+            update_activity(config, "💥 ได้รับคำสั่งฉุกเฉิน! กำลังบังคับปิดออเดอร์ทั้งหมด...")
+            
+            if len(bot_positions) > 0:
+                # คำนวณกำไร/ขาดทุนก่อนปิด
+                panic_pnl = sum([(p.profit + p.swap) for p in bot_positions])
+                
+                # สั่งบังคับปิดออเดอร์
+                force_close_all_positions(symbol, magic_number)
+                
+                # ส่งแจ้งเตือน
+                send_telegram_msg(config, f"💥 [ฉุกเฉิน] ผู้ใช้กดสั่งปิดออเดอร์ผ่านหน้าเว็บ!\nผลประกอบการสุทธิ: ${panic_pnl:.2f}", current_price)
+            else:
+                update_activity(config, "✅ ไม่มีออเดอร์ค้างอยู่แล้ว")
+                
+            # 🌟 เคลียร์คำสั่งในฐานข้อมูลเพื่อไม่ให้มันปิดซ้ำรัวๆ
+            core_db.save_db("ui_command", {})
+            time.sleep(2)
+            continue # ข้ามลูปกลับไปเริ่มต้นใหม่
+
         # ----------------------------------------
         # โหมดที่ 1: มีออเดอร์ค้างอยู่ (Holding) - ไม้เดียวเน้นๆ
         # ----------------------------------------
@@ -525,12 +620,19 @@ def main():
 
             ai_status_msg = "กำลังวิเคราะห์ตลาด..."
             
-            # 1. เช็ค Spread ลิมิต
+            # 🌟 1. เช็คข่าว (News Filter) 
+            is_safe_news, news_msg = is_safe_from_news(config)
+            if not is_safe_news:
+                is_market_safe = False
+                ai_status_msg = news_msg
+                update_activity(config, f"📰 {news_msg}")
+
+            # 2. เช็ค Spread ลิมิต
             if current_spread > config.get('max_spread_points', 500):
                 is_market_safe = False
                 ai_status_msg = f"พักเทรดชั่วคราว: สเปรดถ่างรุนแรง ({current_spread:.0f})"
             
-            # 2. ถ้าปลอดภัย ให้ AI อ่านกราฟ Multi-Timeframe + Volume + S/R
+            # 3. ถ้าปลอดภัย ให้ AI อ่านกราฟ Multi-Timeframe + Volume + S/R
             if is_market_safe:
                 update_activity(config, "🧠 ประมวลผล H1/M5 + Volume และดึงแนวรับแนวต้าน ส่งให้ AI...")
                 
@@ -568,6 +670,10 @@ def main():
                                 if success:
                                     update_activity(config, f"🎯 เข้า {action} เรียบร้อย | เหตุผล: {reason}")
                                     ai_status_msg = f"เข้าออเดอร์ {action} สำเร็จ! ({reason})"
+                                    live_data["details"]["ai_reason"] = ai_status_msg
+                                    save_live_status(live_data)
+                                    time.sleep(1)
+                                    continue
                             else:
                                 ai_status_msg = f"ยกเลิก {action} เนื่องจาก AI ไม่ได้กำหนด SL/TP อย่างชัดเจน"
             

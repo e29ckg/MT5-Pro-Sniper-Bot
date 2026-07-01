@@ -159,6 +159,13 @@ config['time_end'] = st.sidebar.text_input("เวลาปิดออเดอ
 st.sidebar.caption("🔥 **โหมดรีดกำไร:** 1 ชม. ก่อนถึงเวลาปิดออเดอร์ บอทจะบังคับเลื่อน SL แบบขั้นบันได เพื่อไล่เก็บกำไรให้มากที่สุด")
 
 st.sidebar.markdown("---")
+st.sidebar.header("📰 8. ระบบหลบข่าว (News Filter)")
+config['use_news_filter'] = st.sidebar.checkbox("เปิดใช้งานระบบหลบข่าว (กล่องแดง)", value=config.get('use_news_filter', True), on_change=on_param_change)
+config['news_currency'] = st.sidebar.text_input("สกุลเงินที่ต้องระวัง (เช่น USD)", value=config.get('news_currency', 'USD'), on_change=on_param_change)
+config['news_pause_before'] = st.sidebar.number_input("หยุดเทรด 'ก่อน' ข่าว (นาที)", min_value=0, max_value=120, value=config.get('news_pause_before', 30), on_change=on_param_change)
+config['news_pause_after'] = st.sidebar.number_input("หยุดเทรด 'หลัง' ข่าว (นาที)", min_value=0, max_value=120, value=config.get('news_pause_after', 30), on_change=on_param_change)
+
+st.sidebar.markdown("---")
 st.sidebar.header("🔒 ตั้งค่าความปลอดภัย")
 # ช่องเปลี่ยนรหัสผ่าน
 new_pwd = st.sidebar.text_input("เปลี่ยนรหัสผ่านใหม่", value=config.get('web_password', 'admin123'), type="password")
