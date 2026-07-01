@@ -5,7 +5,7 @@ import json
 import os
 import requests
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import mplfinance as mpf
 from PIL import Image
 from google import genai
@@ -231,6 +231,66 @@ def modify_position_sl(config, ticket, symbol, new_sl, current_tp):
         print(f"เลื่อน SL ไม่สำเร็จ Code: {result.retcode}")
         return False
 
+def check_time_status(config):
+    """ตรวจสอบเวลาปัจจุบันว่าอยู่ในช่วงเทรด หรือต้องบังคับปิดออเดอร์"""
+    use_time = config.get('use_time_filter', False)
+    if not use_time:
+        return True, False, False # can_trade, is_rush_hour, is_force_close
+        
+    time_start_str = config.get('time_start', '06:00')
+    time_end_str = config.get('time_end', '23:50')
+    
+    try:
+        now = datetime.now()
+        # แปลงข้อความเป็นเวลาของวันนี้
+        start_dt = datetime.strptime(time_start_str, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+        end_dt = datetime.strptime(time_end_str, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+        
+        if end_dt < start_dt:
+            end_dt += timedelta(days=1)
+            
+        time_left = (end_dt - now).total_seconds()
+        
+        can_trade = start_dt <= now < end_dt
+        
+        # รีดกำไร (Rush Hour): ช่วง 1 ชั่วโมง (3600 วินาที) ก่อนเวลาปิด
+        is_rush_hour = 0 <= time_left <= 3600 and can_trade
+        
+        # บังคับปิด (Force Close): เมื่อเลยเวลาปิดไปแล้ว (แต่ไม่เกิน 1 ชม. เพื่อไม่ให้บอทค้างตอนเช้า)
+        is_force_close = -3600 <= time_left < 0
+        
+        return can_trade, is_rush_hour, is_force_close
+    except Exception as e:
+        print(f"ตั้งค่าเวลาผิดพลาด: {e}")
+        return True, False, False
+
+def force_close_all_positions(symbol, magic_number):
+    """ฟังก์ชันบังคับปิดทุกออเดอร์ทันที"""
+    positions = mt5.positions_get(symbol=symbol, magic=magic_number)
+    if positions is None or len(positions) == 0:
+        return False
+        
+    for pos in positions:
+        tick = mt5.symbol_info_tick(symbol)
+        price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+        action_type = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "position": pos.ticket,
+            "symbol": symbol,
+            "volume": pos.volume,
+            "type": action_type,
+            "price": price,
+            "deviation": 20,
+            "magic": magic_number,
+            "comment": "Force Close - End of Day",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        mt5.order_send(request)
+    return True
+
 # ==========================================
 # 🚀 ลูปการทำงานหลัก (Main Loop)
 # ==========================================
@@ -240,7 +300,8 @@ def main():
         print("❌ ไม่สามารถเชื่อมต่อ MT5 ได้")
         return
         
-    while True:
+    while True:       
+
         config = load_config()
         if not config or config.get("bot_status") != "running":
             save_live_status({"status": "stopped", "mode": "STANDBY", "details": {"ai_reason": "บอทกำลังพักผ่อน"}})
@@ -275,6 +336,43 @@ def main():
             "details": {"current_spread": current_spread}
         }
 
+        # 🌟 เช็คเวลาปัจจุบัน
+        can_trade, is_rush_hour, is_force_close = check_time_status(config)
+        
+        # 🚨 บังคับตัดจบก่อนข้ามวัน
+        if is_force_close and len(bot_positions) > 0:
+            total_profit_loss = sum([(p.profit + p.swap) for p in bot_positions])
+            
+            if total_profit_loss > 0:
+                result_icon = "🟢 กำไร"
+            elif total_profit_loss < 0:
+                result_icon = "🔴 ขาดทุน"
+            else:
+                result_icon = "⚪ เสมอตัว"
+                
+            update_activity(config, f"⏰ หมดเวลาเทรด! สั่งปิดออเดอร์ | ผลประกอบการ: ${total_profit_loss:.2f}")
+            
+            # สั่งบังคับปิดออเดอร์
+            force_close_all_positions(symbol, magic_number)
+            
+            # 🌟 จัดหน้าตาข้อความสรุปผลส่งเข้า Telegram
+            summary_msg = (
+                f"⏰ หมดเวลาทำการ (Day Trade)\n"
+                f"ระบบได้ทำการเคลียร์ออเดอร์ที่ค้างอยู่ทั้งหมดแล้ว\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"📊 ผลประกอบการไม้สุดท้าย:\n"
+                f"สถานะ: {result_icon}\n"
+                f"ยอดสุทธิ: ${total_profit_loss:.2f}\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"💤 บอทเข้าสู่โหมดสแตนด์บาย พักผ่อนได้เลยครับ!"
+            )
+            
+            # ส่งแจ้งเตือน
+            send_telegram_msg(config, summary_msg, current_price)
+            
+            time.sleep(2)
+            continue # ปิดเสร็จให้ข้ามลูปไปเลย รอจนกว่าจะถึงเช้าวันใหม่
+
         # ----------------------------------------
         # โหมดที่ 1: มีออเดอร์ค้างอยู่ (Holding) - ไม้เดียวเน้นๆ
         # ----------------------------------------
@@ -287,6 +385,12 @@ def main():
             # --- 🛡️ ระบบล็อกกำไร (Dynamic Break-Even & Step Trailing) ---
             use_profit_lock = config.get('use_profit_lock', True)
             lock_style = config.get('profit_lock_style', 'ล็อกครั้งเดียว (One-Time)')
+
+            # 🌟 ถือออเดอร์มาถึงช่วง 1 ชั่วโมงสุดท้าย บังคับเปิดโหมด "ขั้นบันได" รีดกำไรทันที
+            if is_rush_hour:
+                lock_style = "เลื่อนตามขั้นบันได (Step Trailing)"
+                update_activity(config, "🔥 โหมด Rush Hour: เปิด Step Trailing รีดกำไรโค้งสุดท้ายก่อนตลาดปิด!")
+
             lock_percent_val = config.get('profit_lock_percent', 25) / 100.0 
             
             if use_profit_lock and pos.tp > 0.0 and pos.sl > 0.0:
@@ -302,26 +406,22 @@ def main():
                         log_percent = 0
                         
                         if lock_style == "เลื่อนตามขั้นบันได (Step Trailing)":
-                            # โหมดขั้นบันได ไล่เก็บกำไรตามระยะ
                             if profit_distance >= tp_distance * 0.90:
-                                target_sl = pos.price_open + (tp_distance * 0.75) # ด่าน 3: ชน 90% ล็อก 75%
+                                target_sl = pos.price_open + (tp_distance * 0.75)
                                 log_percent = 75
                             elif profit_distance >= tp_distance * 0.75:
-                                target_sl = pos.price_open + (tp_distance * 0.50) # ด่าน 2: ชน 75% ล็อก 50%
+                                target_sl = pos.price_open + (tp_distance * 0.50)
                                 log_percent = 50
                             elif profit_distance >= tp_distance * 0.50:
-                                target_sl = pos.price_open + (tp_distance * lock_percent_val) # ด่าน 1: ชน 50% ล็อกตามเว็บ
+                                target_sl = pos.price_open + (tp_distance * lock_percent_val)
                                 log_percent = int(lock_percent_val * 100)
                         else:
-                            # โหมดล็อกครั้งเดียว ปล่อยกราฟหายใจ
                             if profit_distance >= tp_distance * 0.50:
                                 target_sl = pos.price_open + (tp_distance * lock_percent_val)
                                 log_percent = int(lock_percent_val * 100)
                         
-                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายสูงกว่า SL ปัจจุบัน (ไม่เลื่อนถอยหลัง)                        # 🟢 ฝั่ง BUY (แก้ไขท่อนล่างสุดของ BUY)
                         if target_sl > 0 and pos.sl < target_sl:
                             mod_result = modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp)
-                            # 🌟 เช็คว่าถ้าเป็น True (เลื่อนสำเร็จจริงๆ) ถึงจะส่งข้อความ
                             if mod_result == True: 
                                 msg = f"🛡️ เซฟพอร์ต! เลื่อน SL บังหน้าทุน + ล็อกกำไร {log_percent}% ที่ราคา {target_sl:.2f}"
                                 update_activity(config, msg)
@@ -352,15 +452,12 @@ def main():
                                 target_sl = pos.price_open - (tp_distance * lock_percent_val)
                                 log_percent = int(lock_percent_val * 100)
                         
-                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายต่ำกว่า SL ปัจจุบัน (ฝั่ง SELL) หรือยังเป็น 0                        # 🔴 ฝั่ง SELL (แก้ไขท่อนล่างสุดของ SELL)
                         if target_sl > 0 and (pos.sl > target_sl or pos.sl == 0):
                             mod_result = modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp)
-                            # 🌟 เช็คว่าถ้าเป็น True (เลื่อนสำเร็จจริงๆ) ถึงจะส่งข้อความ
                             if mod_result == True: 
                                 msg = f"🛡️ เซฟพอร์ต! เลื่อน SL บังหน้าทุน + ล็อกกำไร {log_percent}% ที่ราคา {target_sl:.2f}"
                                 update_activity(config, msg)
                                 send_telegram_msg(config, msg, current_price)
-                                is_sl_moved = True
                                 is_sl_moved = True
 
             # อัปเดตข้อมูลขึ้นหน้าเว็บ
@@ -381,6 +478,12 @@ def main():
         else:
             live_data["mode"] = "SCANNING"
             is_market_safe = True
+            
+            # 🌟 ถ้านอกเวลาเทรด ห้ามเปิดออเดอร์ใหม่
+            if not can_trade:
+                is_market_safe = False
+                update_activity(config, f"⏳ นอกเวลาทำการ (เริ่มเทรดอีกครั้งเวลา {config.get('time_start', '06:00')})")
+
             ai_status_msg = "กำลังวิเคราะห์ตลาด..."
             
             # 1. เช็ค Spread ลิมิต
@@ -400,7 +503,6 @@ def main():
                 live_data["details"]["sr_data"] = sr_data
                 
                 if chart_h1 and chart_m5:
-                    # ส่ง sr_data เข้าไปในฟังก์ชันด้วย
                     decision = ask_gemini(api_key, chart_h1, chart_m5, current_price, current_spread, sr_data)
                     
                     action = decision.get("action", "HOLD")
@@ -417,22 +519,18 @@ def main():
                             update_activity(config, f"❌ ปฏิเสธการเข้าออเดอร์: RR {rr} ต่ำเกินไป (ขั้นต่ำ 1.5)")
                             ai_status_msg = f"HOLD (Reject: RR {rr} ต่ำเกินไป)"
                         else:
-                            # เข้าเงื่อนไข RR ค่อยส่งคำสั่งยิง
+                            # 🌟 แก้ไขแล้ว: ต้องเข้าเงื่อนไข RR ค่อยส่งคำสั่งยิง
                             lot = get_dynamic_lot(config)
                             sl = decision.get("sl_price", 0)
                             tp = decision.get("tp_price", 0)
                             
-                        lot = get_dynamic_lot(config)
-                        sl = decision.get("sl_price", 0)
-                        tp = decision.get("tp_price", 0)
-                        
-                        if sl != 0 and tp != 0:
-                            success = send_order_with_sl_tp(config, symbol, action.lower(), lot, magic_number, sl, tp, current_price)
-                            if success:
-                                update_activity(config, f"🎯 เข้า {action} เรียบร้อย | เหตุผล: {reason}")
-                                ai_status_msg = f"เข้าออเดอร์ {action} สำเร็จ! ({reason})"
-                        else:
-                            ai_status_msg = f"ยกเลิก {action} เนื่องจาก AI ไม่ได้กำหนด SL/TP อย่างชัดเจน"
+                            if sl != 0 and tp != 0:
+                                success = send_order_with_sl_tp(config, symbol, action.lower(), lot, magic_number, sl, tp, current_price)
+                                if success:
+                                    update_activity(config, f"🎯 เข้า {action} เรียบร้อย | เหตุผล: {reason}")
+                                    ai_status_msg = f"เข้าออเดอร์ {action} สำเร็จ! ({reason})"
+                            else:
+                                ai_status_msg = f"ยกเลิก {action} เนื่องจาก AI ไม่ได้กำหนด SL/TP อย่างชัดเจน"
             
             # อัปเดตเหตุผลของ AI กลับไปยังหน้าเว็บ
             live_data["details"]["ai_reason"] = ai_status_msg
