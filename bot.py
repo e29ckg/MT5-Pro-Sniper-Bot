@@ -14,6 +14,38 @@ import core_db
 
 import sys
 
+HISTORY_FILE = "trade_history.json" 
+
+def save_trade_history(ticket, symbol, trade_type, lot, profit, open_time, close_time):
+    """บันทึกประวัติเมื่อไม้ถูกปิดลงไฟล์ history.json"""
+    history = []
+    
+    # 1. โหลดข้อมูลเก่าขึ้นมาก่อน (ถ้ามี)
+    if os.path.exists(HISTORY_FILE) and os.path.getsize(HISTORY_FILE) > 0:
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except json.JSONDecodeError:
+            history = []
+            
+    # 2. สร้างโครงสร้างข้อมูลใหม่ให้ตรงกับที่หน้าเว็บคาดหวัง ('กำไร/ขาดทุน')
+    record = {
+        "Ticket": ticket,
+        "สัญลักษณ์": symbol,
+        "สถานะ": trade_type,
+        "Lot": lot,
+        "เวลาเปิด": open_time,
+        "เวลาปิด": close_time,
+        "กำไร/ขาดทุน": round(profit, 2)
+    }
+    
+    # 3. เอาข้อมูลใหม่ไปต่อท้าย
+    history.append(record)
+    
+    # 4. เซฟกลับลงไฟล์
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
 def animated_sleep(seconds, message="กำลังรอรอบถัดไป"):
     """ฟังก์ชันหน่วงเวลาพร้อมแสดงลูกศรหมุนและนับถอยหลังบนบรรทัดเดิม"""
     spinner = ['|', '/', '-', '\\']
@@ -394,6 +426,21 @@ def report_closed_trade(config, ticket, symbol, current_price):
     
     # รวมผลกำไร, Swap, และค่าคอมมิชชั่น ของทุก Deal ในไม้นี้
     total_profit = sum([d.profit + d.swap + d.commission for d in deals])
+
+    # 🌟 ค้นหาข้อมูลขาเข้า (IN) และขาออก (OUT) ของไม้นี้
+    deal_in = next((d for d in deals if d.entry == mt5.DEAL_ENTRY_IN), None)
+    deal_out = next((d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT), None)
+    
+    if deal_in and deal_out:
+        trade_type = "BUY" if deal_in.type == mt5.DEAL_TYPE_BUY else "SELL"
+        lot = deal_in.volume
+        
+        # แปลงเวลาจาก Timestamp ของ MT5 เป็นข้อความที่อ่านง่าย
+        open_time = datetime.fromtimestamp(deal_in.time).strftime("%Y-%m-%d %H:%M:%S")
+        close_time = datetime.fromtimestamp(deal_out.time).strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 🌟 สั่งให้บันทึกลงไฟล์ history.json
+        save_trade_history(ticket, symbol, trade_type, lot, total_profit, open_time, close_time)
     
     if total_profit > 0:
         status = "🟢 ปิดทำกำไร (Win/Trailing Stop)"
