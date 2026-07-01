@@ -203,20 +203,18 @@ def modify_position_sl(config, ticket, symbol, new_sl, current_tp):
     sym_info = mt5.symbol_info(symbol)
     if sym_info is None: return False
     
-    # ดึงข้อมูลออเดอร์ล่าสุดมาเช็คก่อน
     position = mt5.positions_get(ticket=ticket)
     if not position: return False
     pos = position[0]
     
-    # ปัดเศษทศนิยมให้ตรงกับสเปคโบรกเกอร์
     new_sl_rounded = round(float(new_sl), sym_info.digits)
     new_tp_rounded = round(float(current_tp), sym_info.digits)
     current_sl_rounded = round(pos.sl, sym_info.digits)
     current_tp_rounded = round(pos.tp, sym_info.digits)
     
-    # 🛑 เช็ค Error 10025 ล่วงหน้า: ถ้าค่าใหม่และค่าเก่าตรงกันเป๊ะ ไม่ต้องส่งคำสั่งไปให้เปลือง
+    # 🌟 ถ้าราคาเท่ากันเป๊ะ ให้คืนค่าเป็นคำว่า "ALREADY_SET" แทนคำว่า True
     if new_sl_rounded == current_sl_rounded and new_tp_rounded == current_tp_rounded:
-        return True # หลอกโปรแกรมว่าทำสำเร็จแล้ว เพื่อให้มันข้ามไปเลย
+        return "ALREADY_SET" 
         
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
