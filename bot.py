@@ -5,7 +5,7 @@ import json
 import os
 import requests
 import socket
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 import mplfinance as mpf
 from PIL import Image
 from google import genai
@@ -160,7 +160,7 @@ def create_chart_image(symbol, timeframe, filename):
     
     return filename
 
-def ask_gemini(api_key, img_h1_path, img_m5_path, current_price, current_spread, sr_data):
+def ask_gemini(api_key, model_name, chart_h1, chart_m5, current_price, current_spread, sr_data):
     if not api_key:
         return {"action": "HOLD", "reason": "รอการตั้งค่า API Key จากหน้าเว็บ..."}
         
@@ -202,7 +202,7 @@ def ask_gemini(api_key, img_h1_path, img_m5_path, current_price, current_spread,
         """
         
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=model_name,
             contents=[prompt, img_h1, img_m5],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
@@ -392,6 +392,19 @@ def report_closed_trade(config, ticket, symbol, current_price):
     update_activity(config, f"ออเดอร์ {ticket} ถูกปิด | ผลลัพธ์: ${total_profit:.2f}")
     send_telegram_msg(config, msg, current_price)
 
+def get_today_pnl(symbol, magic_number):
+    """คำนวณกำไรขาดทุนรวมของวันนี้ตาม Magic Number"""
+    now = datetime.now()
+    start_of_day = datetime(now.year, now.month, now.day, 0, 0, 0).timestamp()
+    
+    # ดึงประวัติคำสั่งซื้อขายทั้งหมดของวันนี้
+    history = mt5.history_deals_get(start_of_day, now.timestamp())
+    if history is None:
+        return 0.0
+        
+    daily_pnl = sum([deal.profit + deal.swap + deal.commission for deal in history if deal.magic == magic_number])
+    return daily_pnl
+
 # ==========================================
 # 🚀 ลูปการทำงานหลัก (Main Loop)
 # ==========================================
@@ -414,6 +427,25 @@ def main():
         magic_number = config.get('magic_number', 888888)
         tf_code = config.get('timeframe', mt5.TIMEFRAME_M5)
         api_key = config.get('gemini_api_key', '')
+        ai_model = config.get('gemini_model', 'gemini-1.5-flash')
+
+        # 🌟 ตรวจสอบกำไรขาดทุนของวันนี้
+        today_pnl = get_today_pnl(symbol, magic_number)
+        
+        daily_profit_limit = config.get('daily_profit_limit', 1000.0)
+        daily_loss_limit = config.get('daily_loss_limit', 500.0)
+        
+        if today_pnl >= daily_profit_limit:
+            update_activity(config, f"🎯 ทำกำไรถึงเป้าหมายรายวันแล้ว (${today_pnl:.2f}) | หยุดการทำงานบอทเพื่อความปลอดภัย")
+            config['bot_status'] = 'stopped'
+            save_config(config)
+            continue
+            
+        if today_pnl <= -daily_loss_limit:
+            update_activity(config, f"📉 ขาดทุนถึงขีดจำกัดรายวันแล้ว (${today_pnl:.2f}) | หยุดการทำงานบอทเพื่อความปลอดภัย")
+            config['bot_status'] = 'stopped'
+            save_config(config)
+            continue
         
         tick = mt5.symbol_info_tick(symbol)
         if not tick:
@@ -508,6 +540,38 @@ def main():
             
             pos = bot_positions[-1] 
             current_ticket = pos.ticket
+
+            # ==========================================
+            # 📰 ระบบจัดการออเดอร์ช่วงข่าวแดง (News Panic Management)
+            # ==========================================
+            is_safe_news, news_msg = is_safe_from_news(config)
+            if not is_safe_news:
+                # 🟢 กรณีที่ 1: มีกำไร -> สั่งปิดทำกำไรทันทีก่อนข่าวออก เพื่อความปลอดภัย
+                if total_pnl > 0:
+                    update_activity(config, f"📰 เจอข่าวแดงช่วงมีออเดอร์! มีกำไร ${total_pnl:.2f} สั่งปิดล็อกกำไรทันที")
+                    
+                    # บังคับปิดออเดอร์
+                    force_close_all_positions(symbol, magic_number)
+                    
+                    # แจ้งเตือนเข้า Telegram
+                    news_close_msg = (
+                        f"📰 [News Alert] ปิดออเดอร์ฉุกเฉินหนีข่าวแดง!\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"สถานะ: 🟢 ปิดเก็บกำไรก่อนข่าวออก\n"
+                        f"ยอดสุทธิ: ${total_pnl:.2f}\n"
+                        f"เหตุผล: {news_msg}\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"💰 เซฟกำไรเข้าพอร์ตเรียบร้อยครับ"
+                    )
+                    send_telegram_msg(config, news_close_msg, current_price)
+                    current_ticket = 0  # รีเซ็ตความจำ
+                    time.sleep(2)
+                    continue            # ข้ามลูปเพื่อไปเริ่มสแกนใหม่
+                    
+                # 🔴 กรณีที่ 2: ขาดทุน -> ปล่อยไป ไม่ต้องทำอะไร (ให้เส้น SL ทำหน้าที่ของมัน)
+                else:
+                    update_activity(config, f"📰 ช่วงข่าวแดง แต่ออเดอร์ติดลบ (${total_pnl:.2f}) -> ปล่อยรันตามวินัย ให้ SL ทำหน้าที่")
+                    # โค้ดจะไหลลงไปทำงานระบบ Trailing / ล็อกหน้าทุนตามปกติ ไม่สั่งปิดระบบ
             
             # --- 🛡️ ระบบล็อกกำไร (Dynamic Break-Even & Step Trailing) ---
             use_profit_lock = config.get('use_profit_lock', True)
@@ -644,7 +708,7 @@ def main():
                 live_data["details"]["sr_data"] = sr_data
                 
                 if chart_h1 and chart_m5:
-                    decision = ask_gemini(api_key, chart_h1, chart_m5, current_price, current_spread, sr_data)
+                    decision = ask_gemini(api_key, ai_model, chart_h1, chart_m5, current_price, current_spread, sr_data)
                     
                     action = decision.get("action", "HOLD")
                     reason = decision.get("reason", "ไม่มีเหตุผลระบุ")
