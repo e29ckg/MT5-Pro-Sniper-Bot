@@ -12,6 +12,29 @@ from google import genai
 from google.genai import types
 import core_db 
 
+import sys
+
+def animated_sleep(seconds, message="กำลังรอรอบถัดไป"):
+    """ฟังก์ชันหน่วงเวลาพร้อมแสดงลูกศรหมุนและนับถอยหลังบนบรรทัดเดิม"""
+    spinner = ['|', '/', '-', '\\']
+    end_time = time.time() + seconds
+    
+    while time.time() < end_time:
+        remaining = int(end_time - time.time())
+        for sym in spinner:
+            # ใช้ \r เพื่อพิมพ์ทับบรรทัดเดิมตลอดเวลา
+            sys.stdout.write(f'\r⏳ {message} {sym} (เหลือ {remaining} วินาที)... ')
+            sys.stdout.flush()
+            time.sleep(0.25)
+            
+            # เช็คว่าหมดเวลาหรือยัง ถ้าหมดให้ดีดออกทันที
+            if time.time() >= end_time:
+                break
+                
+    # เมื่อครบเวลา ให้ลบข้อความบนบรรทัดนี้ทิ้ง เพื่อให้ Log ถัดไปแสดงผลได้สวยงาม
+    sys.stdout.write('\r' + ' ' * 60 + '\r')
+    sys.stdout.flush()
+
 # ==========================================
 # 🛠️ ฟังก์ชันช่วยเหลือ (Utility)
 # ==========================================
@@ -746,7 +769,8 @@ def main():
             save_live_status(live_data)
             
             # หน่วงเวลา 3-5 นาทีเพื่อรอแท่งเทียนใหม่ ป้องกันการรัว API จนติด Rate Limit
-            time.sleep(300) 
+            # time.sleep(300) 
+            animated_sleep(300, "รอแท่งเทียน M5 ปิดจบ")
 
 if __name__ == "__main__":
     main()
