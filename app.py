@@ -370,17 +370,42 @@ with tab1:
 with tab2:
     def load_history():
         if os.path.exists(HISTORY_FILE):
+            # 🌟 เพิ่มบรรทัดนี้: เช็คว่าถ้าไฟล์ว่างเปล่าสนิท (0 bytes) ให้ข้ามการอ่านไปเลย
+            if os.path.getsize(HISTORY_FILE) == 0:
+                return []
+                
             try:
-                with open(HISTORY_FILE, "r", encoding='utf-8') as f: return json.load(f)
-            except: pass
+                with open(HISTORY_FILE, "r", encoding='utf-8') as f: 
+                    return json.load(f)
+            except json.JSONDecodeError:
+                # 🌟 ดัก Error กรณีไฟล์พังหรือไม่มีโครงสร้าง JSON ให้ส่งค่าว่างกลับไป
+                return []
+            except Exception as e:
+                st.error(f"❌ อ่านไฟล์ประวัติไม่ได้: {e}") 
         return []
+
     hist_data = load_history()
+    
+    # ถ้ามีข้อมูลและเป็น List จริงๆ ค่อยแสดงตาราง
     if isinstance(hist_data, list) and len(hist_data) > 0:
         df_hist = pd.DataFrame(hist_data)
-        total_profit = df_hist['กำไร/ขาดทุน'].sum()
+        
+        # 🌟 ป้องกันแอปพัง ถ้าใน JSON ไม่มีคีย์ชื่อ 'กำไร/ขาดทุน'
+        if 'กำไร/ขาดทุน' in df_hist.columns:
+            total_profit = df_hist['กำไร/ขาดทุน'].sum()
+        else:
+            total_profit = 0.0
+            st.warning("⚠️ พบข้อมูลประวัติ แต่ไม่พบคอลัมน์ที่ชื่อ 'กำไร/ขาดทุน'")
+            
         st.metric("💰 กำไรสุทธิรวม (One-Shot Trades)", f"${total_profit:.2f}")
+        
+        # กลับด้านข้อมูลให้ไม้ล่าสุดอยู่บนสุด
         df_hist_reversed = df_hist.iloc[::-1].reset_index(drop=True)
         st.dataframe(df_hist_reversed, use_container_width=True)
+        
+    else:
+        # 🌟 เพิ่มบรรทัดนี้ เพื่อบอกให้รู้ว่าทำไมถึงไม่มีตารางขึ้น
+        st.info("📭 ยังไม่มีประวัติการเทรด หรือไฟล์ประวัติว่างเปล่า")
 
 with tab3:
     st.markdown("### 🔬 จำลองการเทรดด้วย Gemini AI (Backtester)")
