@@ -152,6 +152,13 @@ config['telegram_token'] = st.sidebar.text_input("Bot Token", value=config.get('
 config['telegram_chat_id'] = st.sidebar.text_input("Chat ID", value=config.get('telegram_chat_id', ""), on_change=on_param_change)
 
 st.sidebar.markdown("---")
+st.sidebar.header("⏰ 7. ตั้งเวลาเทรด (ไม่ถือข้ามวัน)")
+config['use_time_filter'] = st.sidebar.checkbox("เปิดใช้งานระบบเวลา", value=config.get('use_time_filter', False), on_change=on_param_change)
+config['time_start'] = st.sidebar.text_input("เวลาเริ่มเทรด (HH:MM)", value=config.get('time_start', '06:00'), on_change=on_param_change)
+config['time_end'] = st.sidebar.text_input("เวลาปิดออเดอร์ (HH:MM)", value=config.get('time_end', '23:50'), on_change=on_param_change)
+st.sidebar.caption("🔥 **โหมดรีดกำไร:** 1 ชม. ก่อนถึงเวลาปิดออเดอร์ บอทจะบังคับเลื่อน SL แบบขั้นบันได เพื่อไล่เก็บกำไรให้มากที่สุด")
+
+st.sidebar.markdown("---")
 st.sidebar.header("🔒 ตั้งค่าความปลอดภัย")
 # ช่องเปลี่ยนรหัสผ่าน
 new_pwd = st.sidebar.text_input("เปลี่ยนรหัสผ่านใหม่", value=config.get('web_password', 'admin123'), type="password")
