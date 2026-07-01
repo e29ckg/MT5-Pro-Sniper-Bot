@@ -6,9 +6,15 @@ __pycache__/
 live_status.json
 trade_history.json
 
+*.png
+
+bot_data.*
+
 # ไฟล์ตั้งค่า (ที่มี Token ความลับ)
 *.json
 config.json
 
 bot_data.sqlite
 bot_system.log
+
+Caddyfile
