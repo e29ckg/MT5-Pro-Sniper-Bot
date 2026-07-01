@@ -460,12 +460,14 @@ def main():
         
         if today_pnl >= daily_profit_limit:
             update_activity(config, f"🎯 ทำกำไรถึงเป้าหมายรายวันแล้ว (${today_pnl:.2f}) | หยุดการทำงานบอทเพื่อความปลอดภัย")
+            send_telegram_msg(config, msg, current_price)
             config['bot_status'] = 'stopped'
             save_config(config)
             continue
             
         if today_pnl <= -daily_loss_limit:
             update_activity(config, f"📉 ขาดทุนถึงขีดจำกัดรายวันแล้ว (${today_pnl:.2f}) | หยุดการทำงานบอทเพื่อความปลอดภัย")
+            send_telegram_msg(config, msg, current_price)
             config['bot_status'] = 'stopped'
             save_config(config)
             continue
@@ -713,6 +715,9 @@ def main():
                 is_market_safe = False
                 ai_status_msg = news_msg
                 update_activity(config, f"📰 {news_msg}")
+                if live_data.get("last_news_alert") != news_msg:
+                    send_telegram_msg(config, f"📰 [News Filter] พักเทรดชั่วคราว\nสถานะ: {news_msg}", current_price)
+                    live_data["last_news_alert"] = news_msg # จำไว้ว่าส่งข้อความนี้ไปแล้ว
 
             # 2. เช็ค Spread ลิมิต
             if current_spread > config.get('max_spread_points', 500):
@@ -738,6 +743,15 @@ def main():
                     
                     ai_status_msg = f"{action} -> {reason}"
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 มุมมอง AI: {ai_status_msg}")
+                    # 🌟 เพิ่มระบบแจ้งเตือน AI Error ตรงนี้
+                    if "Error" in reason or "429" in reason or "503" in reason:
+                        error_msg = (
+                            f"⚠️ [AI System] บอทเข้าสู่โหมดพักชั่วคราว\n"
+                            f"สาเหตุ: ตรวจพบปัญหาการเชื่อมต่อเซิร์ฟเวอร์ AI\n"
+                            f"รายละเอียด: {reason}\n"
+                            f"💡 ระบบจะลองใหม่อีกครั้งในรอบถัดไป..."
+                        )
+                        send_telegram_msg(config, error_msg, current_price)
                     
                     if action in ["BUY", "SELL"]:
                         rr = decision.get("rr_ratio", 0)
