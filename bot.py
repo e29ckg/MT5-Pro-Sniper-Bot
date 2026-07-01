@@ -318,9 +318,11 @@ def main():
                                 target_sl = pos.price_open + (tp_distance * lock_percent_val)
                                 log_percent = int(lock_percent_val * 100)
                         
-                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายสูงกว่า SL ปัจจุบัน (ไม่เลื่อนถอยหลัง)
+                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายสูงกว่า SL ปัจจุบัน (ไม่เลื่อนถอยหลัง)                        # 🟢 ฝั่ง BUY (แก้ไขท่อนล่างสุดของ BUY)
                         if target_sl > 0 and pos.sl < target_sl:
-                            if modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp):
+                            mod_result = modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp)
+                            # 🌟 เช็คว่าถ้าเป็น True (เลื่อนสำเร็จจริงๆ) ถึงจะส่งข้อความ
+                            if mod_result == True: 
                                 msg = f"🛡️ เซฟพอร์ต! เลื่อน SL บังหน้าทุน + ล็อกกำไร {log_percent}% ที่ราคา {target_sl:.2f}"
                                 update_activity(config, msg)
                                 send_telegram_msg(config, msg, current_price)
@@ -350,12 +352,15 @@ def main():
                                 target_sl = pos.price_open - (tp_distance * lock_percent_val)
                                 log_percent = int(lock_percent_val * 100)
                         
-                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายต่ำกว่า SL ปัจจุบัน (ฝั่ง SELL) หรือยังเป็น 0
+                        # สั่งเลื่อน SL ถ้าราคาเป้าหมายต่ำกว่า SL ปัจจุบัน (ฝั่ง SELL) หรือยังเป็น 0                        # 🔴 ฝั่ง SELL (แก้ไขท่อนล่างสุดของ SELL)
                         if target_sl > 0 and (pos.sl > target_sl or pos.sl == 0):
-                            if modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp):
+                            mod_result = modify_position_sl(config, pos.ticket, symbol, target_sl, pos.tp)
+                            # 🌟 เช็คว่าถ้าเป็น True (เลื่อนสำเร็จจริงๆ) ถึงจะส่งข้อความ
+                            if mod_result == True: 
                                 msg = f"🛡️ เซฟพอร์ต! เลื่อน SL บังหน้าทุน + ล็อกกำไร {log_percent}% ที่ราคา {target_sl:.2f}"
                                 update_activity(config, msg)
                                 send_telegram_msg(config, msg, current_price)
+                                is_sl_moved = True
                                 is_sl_moved = True
 
             # อัปเดตข้อมูลขึ้นหน้าเว็บ
