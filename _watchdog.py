@@ -3,8 +3,9 @@ import os
 import core_db
 from datetime import datetime
 
-# 💡 ตั้งค่าความอดทน (กี่วินาทีถึงจะถือว่าบอทค้าง)
-MAX_DELAY_SECONDS = 300  # 300 วินาที = 5 นาที
+# 💡 1. ปรับเวลาเพิ่มขึ้น! เพราะบอทหลักมีจังหวะหน่วงเวลา 300 วินาที
+# ควรตั้งเผื่อให้บอททำงานและส่งข้อมูลกลับมา (แนะนำที่ 7-10 นาที)
+MAX_DELAY_SECONDS = 450  # 450 วินาที = 7.5 นาที
 
 def send_alert_if_enabled(msg):
     """ แอบส่งแจ้งเตือนเข้า Telegram ถ้าตั้งค่าไว้ """
@@ -16,7 +17,7 @@ def send_alert_if_enabled(msg):
         if token and chat_id:
             try:
                 machine = socket.gethostname()
-                payload = {"chat_id": chat_id, "text": f"🖥️ <b>[{machine}]</b>\n{msg}", "parse_mode": "HTML"}
+                payload = {"chat_id": chat_id, "text": f"🐕 <b>[Watchdog - {machine}]</b>\n{msg}", "parse_mode": "HTML"}
                 requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=5)
             except: pass
 
@@ -34,14 +35,21 @@ while True:
         live_data = core_db.load_db("live_status")
         if live_data and "last_update" in live_data:
             last_update_str = live_data["last_update"]
-            last_update = datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S")
+            
+            # 💡 2. ดัก Error กรณีรูปแบบเวลาเพี้ยน เพื่อไม่ให้ Watchdog พังซะเอง
+            try:
+                last_update = datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                time.sleep(10)
+                continue
+                
             now = datetime.now()
             
             # คำนวณว่าบอทเงียบไปกี่วินาทีแล้ว
             delay = (now - last_update).total_seconds()
             
             if delay > MAX_DELAY_SECONDS:
-                alert_msg = f"🚨 <b>[SYSTEM ALERT]</b>\nบอทเงียบหายไป {delay:.0f} วินาที (อาจจะค้าง)\n🐕 Watchdog กำลังทำการ Restart บอทใหม่..."
+                alert_msg = f"🚨 <b>[SYSTEM ALERT]</b>\nบอทเงียบหายไป {delay:.0f} วินาที (เกินลิมิตที่ {MAX_DELAY_SECONDS}s)\nกำลังทำการ Restart บอทใหม่..."
                 print(alert_msg)
                 send_alert_if_enabled(alert_msg)
                 
@@ -49,13 +57,13 @@ while True:
                 os.system('taskkill /F /FI "WINDOWTITLE eq Bot_Backend*" /T >nul 2>&1')
                 time.sleep(3)
                 
-                # 2. ปลุก Bot ขึ้นมาใหม่ (หน้าต่างใหม่)
+                # 2. ปลุก Bot ขึ้นมาใหม่
                 print("🔄 [Watchdog] กำลังเปิดระบบ Bot Backend ขึ้นมาใหม่...")
-                # สมมติว่ารันอยู่ใน venv 
+                # 💡 3. เช็คให้ชัวร์ว่าเปิดหน้าต่างใหม่ด้วยชื่อ "Bot_Backend" เพื่อให้รอบหน้า taskkill หาเจอ
                 os.system('start "Bot_Backend" cmd /k "venv\\Scripts\\activate && python bot.py"')
                 
-                # พักให้บอทบูตเครื่อง 1 นาที ค่อยเริ่มเฝ้าใหม่
-                time.sleep(60) 
+                # 💡 4. พักให้บอทบูตเครื่องและวิเคราะห์กราฟให้เสร็จ 2 นาที ค่อยเริ่มเฝ้าใหม่
+                time.sleep(120) 
         
         # วนรอบตรวจตราทุกๆ 10 วินาที
         time.sleep(10)
